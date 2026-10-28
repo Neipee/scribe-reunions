@@ -9,7 +9,7 @@ fois depuis Hugging Face puis gardé dans `models/`.
 - Il n'y a ni télémétrie ni service tiers.
 
 Le modèle tourne sur le PC. Le téléphone sert seulement de micro et d'écran, via son navigateur
-(voir les limites plus bas). Décisions et mesures : [docs/POC.md](docs/POC.md).
+ou l'appli Android « Scribe » (voir « Installer l'APK sur le téléphone » et les limites plus bas). Décisions et mesures : [docs/POC.md](docs/POC.md).
 
 ## Prérequis
 
@@ -77,6 +77,49 @@ Points à connaître :
 - **Réseau d'entreprise.** Les réseaux Wi-Fi d'entreprise ou invités isolent souvent les appareils entre eux. Le plus simple : un partage de connexion du téléphone vers le PC, ou un réseau domestique.
 - **Changement d'adresse IP.** Si l'adresse IP du PC change, relancer avec `--lan --new-cert`.
 - **Écran du téléphone.** Il doit rester allumé et la page ouverte pendant l'enregistrement. La page demande de garder l'écran actif quand le navigateur le permet.
+- **Empreinte du certificat.** La console affiche aussi l'« Empreinte SHA-256 du certificat ». L'appli Android la montre au premier raccordement pour comparaison.
+
+## Installer l'APK sur le téléphone
+
+Une appli Android « Scribe » remplace le navigateur côté téléphone. C'est un simple client : le modèle
+tourne toujours sur le PC, et l'appli ne contacte que l'adresse du PC saisie. Elle est compilée par
+GitHub Actions à chaque tag `v*` ([workflow](.github/workflows/android.yml)). Détails techniques et choix
+de sécurité : [docs/APK.md](docs/APK.md).
+
+**Dernière version :** <https://github.com/Neipee/scribe-reunions/releases/latest>
+
+1. Sur le téléphone, ouvrir le lien ci-dessus et télécharger le fichier `scribe-vX.Y.Z.apk`
+   (rubrique « Assets »).
+2. Ouvrir le fichier téléchargé. Android demande d'autoriser l'installation depuis cette source
+   (le navigateur ou l'appli Fichiers) : l'autoriser, puis revenir et appuyer sur « Installer ».
+   Play Protect peut avertir d'une appli inconnue : choisir « Installer quand même ».
+3. Sur le PC, lancer `.venv\Scripts\python run.py --lan`. Noter l'adresse
+   `https://192.168.x.y:8765/?t=…` et l'empreinte SHA-256 affichées.
+4. Dans l'appli, saisir l'adresse complète (le jeton `?t=…` est extrait automatiquement), ou
+   l'adresse et le jeton séparément, puis appuyer sur **Se connecter**.
+5. Au premier raccordement, l'appli affiche l'empreinte du certificat du PC. La comparer avec celle
+   de la console (au moins les premiers et derniers groupes), puis appuyer sur
+   **Identiques, faire confiance**. Ne pas accepter si elles diffèrent.
+6. Appuyer sur **Enregistrer** et autoriser le micro quand Android le demande.
+
+Facultatif : comparer l'empreinte SHA-256 de l'APK avec celle indiquée dans la release (fichier
+`.sha256`).
+
+Limites :
+
+- **PC allumé, même réseau.** Le PC doit être allumé, lancé avec `--lan`, et le téléphone sur le
+  même réseau Wi-Fi (ou partage de connexion). Le pare-feu Windows doit autoriser Python.
+- **Jeton à chaque lancement.** Le jeton change à chaque démarrage du PC : il faut le ressaisir
+  (l'appli garde l'adresse et l'empreinte, le message « Jeton refusé » le signale).
+- **Certificat auto-signé.** L'appli ne l'accepte que s'il a l'empreinte que vous avez confirmée.
+  Après `--new-cert`, elle signale le changement et redemande la comparaison.
+- **Pas d'enregistrement écran éteint.** L'appli garde l'écran allumé tant qu'elle est au premier
+  plan. Si l'écran est verrouillé ou si l'on change d'appli, l'enregistrement peut s'interrompre.
+  L'enregistrement en arrière-plan est hors du périmètre de ce PoC.
+- **Clé de signature de test.** Chaque compilation est signée avec une clé de test différente,
+  générée puis jetée par le workflow. Pour installer une nouvelle version, **désinstaller d'abord
+  l'ancienne** (sinon Android refuse : « conflit avec un package existant »).
+- **Non testée sur un vrai téléphone** à ce stade (voir docs/APK.md, « À tester »).
 
 ## Mise à jour du modèle
 
