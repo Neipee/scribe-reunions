@@ -1,0 +1,155 @@
+# Compile l'appli Android « Scribe » et publie l'APK dans une GitHub Release.
+# Déclenchement : push d'un tag v* (ex. v0.1.0). workflow_dispatch compile sans publier.
+name: APK Android
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compilation de l'APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Vérifie que gradle-wrapper.jar est un wrapper officiel de Gradle.
+      - uses: gradle/actions/wrapper-validation@v6
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            name="${BASH_REMATCH[1]}"
+          else
+            name="0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "Version : $name (versionCode $GITHUB_RUN_NUMBER)"
+
+      # Clé de signature. Par défaut : clé de TEST générée à chaque exécution et jetée ensuite
+      # (aucun secret dans le dépôt). Si le propriétaire du dépôt ajoute les secrets
+      # SCRIBE_KEYSTORE_BASE64 / SCRIBE_KEYSTORE_PASSWORD / SCRIBE_KEY_ALIAS / SCRIBE_KEY_PASSWORD,
+      # cette clé stable est utilisée à la place (mises à jour sans désinstaller).
+      - name: Clé de signature
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SCRIBE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SCRIBE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SCRIBE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SCRIBE_KEY_PASSWORD }}
+        run: |
+          keystore="$RUNNER_TEMP/scribe-signing.p12"
+          if [[ -n "$KEYSTORE_BASE64" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$keystore"
+            store_pass="$KEYSTORE_PASSWORD"; alias="$KEY_ALIAS"; key_pass="$KEY_PASSWORD"
+            echo "SIGNING_KIND=stable" >> "$GITHUB_ENV"
+          else
+            store_pass="$(openssl rand -hex 24)"
+            echo "::add-mask::$store_pass"
+            alias="scribe-test"; key_pass="$store_pass"
+            keytool -genkeypair -noprompt -keystore "$keystore" -storetype PKCS12 \
+              -alias "$alias" -keyalg RSA -keysize 3072 -validity 3650 \
+              -storepass "$store_pass" -keypass "$key_pass" \
+              -dname "CN=Scribe - cle de TEST jetable (une par compilation), O=Scribe PoC"
+            echo "SIGNING_KIND=test" >> "$GITHUB_ENV"
+          fi
+          {
+            echo "SCRIBE_KEYSTORE=$keystore"
+            echo "SCRIBE_KEYSTORE_PASSWORD=$store_pass"
+            echo "SCRIBE_KEY_ALIAS=$alias"
+            echo "SCRIBE_KEY_PASSWORD=$key_pass"
+          } >> "$GITHUB_ENV"
+
+      - name: Compilation et lint
+        run: >
+          ./gradlew --no-daemon --stacktrace
+          assembleRelease lintRelease
+          -PscribeVersionName=${{ steps.version.outputs.name }}
+          -PscribeVersionCode=${{ github.run_number }}
+
+      - name: APK, empreinte et notes
+        env:
+          VERSION: ${{ steps.version.outputs.name }}
+        run: |
+          rm -f "$SCRIBE_KEYSTORE"
+          mkdir -p ../dist
+          apk="scribe-v${VERSION}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "../dist/$apk"
+          build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          "$build_tools/apksigner" verify --verbose --print-certs "../dist/$apk" | tee ../dist/signature.txt
+          cert_sha="$(grep -m1 'certificate SHA-256 digest' ../dist/signature.txt | awk '{print $NF}')"
+          cd ../dist
+          sha256sum "$apk" > "$apk.sha256"
+          apk_sha="$(cut -d' ' -f1 "$apk.sha256")"
+          size="$(stat -c %s "$apk")"
+          if [[ "$SIGNING_KIND" == "test" ]]; then
+            signing="Signé avec une **clé de TEST générée pour cette compilation** (jetée ensuite). Chaque nouvelle version est signée avec une clé différente : **désinstallez la version précédente avant d'installer celle-ci**."
+          else
+            signing="Signé avec la clé stable du projet : les versions suivantes s'installent par-dessus."
+          fi
+          cat > notes.md <<NOTES
+          Appli Android « Scribe » (preuve de concept) : client du serveur « Scribe réunions » lancé sur le PC avec \`python run.py --lan\`. Le modèle tourne sur le PC ; l'audio ne quitte pas le réseau local.
+
+          **Non testée sur un vrai téléphone** à la date de publication. Instructions d'installation : voir la section « Installer l'APK sur le téléphone » du README.
+
+          - Fichier : \`$apk\` ($size octets)
+          - SHA-256 de l'APK : \`$apk_sha\`
+          - SHA-256 du certificat de signature : \`$cert_sha\`
+          - $signing
+          - Android 8.0 ou plus récent.
+          NOTES
+          cat notes.md
+          ls -l
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scribe-apk
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publication de la release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: scribe-apk
+          path: dist
+
+      - name: Création de la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/*.apk dist/*.apk.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Scribe $TAG (PoC)" \
+            --notes-file dist/notes.md \
+            --verify-tag
