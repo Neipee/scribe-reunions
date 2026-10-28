@@ -27,6 +27,13 @@ def lan_addresses() -> list[str]:
     return sorted(a for a in addresses if not a.startswith("127."))
 
 
+def fingerprint(cert_path: Path) -> str:
+    """Empreinte SHA-256 du certificat (format AB:CD:…), à comparer avec celle affichée
+    par l'appli Android lors du premier raccordement."""
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    return ":".join(f"{b:02X}" for b in cert.fingerprint(hashes.SHA256()))
+
+
 def ensure_certificate(force: bool = False) -> tuple[Path, Path]:
     cert_path, key_path = CERTS_DIR / "cert.pem", CERTS_DIR / "key.pem"
     if cert_path.exists() and key_path.exists() and not force:

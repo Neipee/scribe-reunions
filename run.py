@@ -12,7 +12,7 @@ import uvicorn
 
 import scribe  # pose les variables d'environnement Hugging Face avant tout le reste
 from scribe import server
-from scribe.certs import ensure_certificate, lan_addresses
+from scribe.certs import ensure_certificate, fingerprint, lan_addresses
 
 
 def main() -> None:
@@ -30,10 +30,13 @@ def main() -> None:
         server.ACCESS_TOKEN = secrets.token_urlsafe(12)
         server.ALLOWED_HOSTS.update(lan_addresses() + [socket.gethostname().lower()])
         options.update(host="0.0.0.0", ssl_certfile=str(cert), ssl_keyfile=str(key))
-        print("\nAccès depuis un téléphone sur le même réseau (accepter l'avertissement de certificat) :")
+        print("\nAccès depuis un téléphone sur le même réseau (appli Scribe, ou navigateur en "
+              "acceptant l'avertissement de certificat) :")
         for ip in lan_addresses() or ["<adresse-IP-du-PC>"]:
             print(f"   https://{ip}:{args.port}/?t={server.ACCESS_TOKEN}")
-        print(f"Sur ce PC : https://localhost:{args.port}/?t={server.ACCESS_TOKEN}\n")
+        print(f"Sur ce PC : https://localhost:{args.port}/?t={server.ACCESS_TOKEN}")
+        print("Empreinte SHA-256 du certificat (à comparer dans l'appli Android Scribe) :")
+        print(f"   {fingerprint(cert)}\n")
     else:
         print(f"\nOuvrir http://127.0.0.1:{args.port} dans le navigateur.\n")
     print(f"Données : {scribe.DATA_DIR}\nModèles : {scribe.MODELS_DIR}\nCtrl+C pour arrêter.\n")
