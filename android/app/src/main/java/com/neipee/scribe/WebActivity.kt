@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -14,6 +15,7 @@ import android.view.View
 import android.view.WindowManager
 import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -32,6 +34,7 @@ import java.io.ByteArrayInputStream
  * - Seule l'origine du PC configuré est chargée ; toute autre requête est bloquée.
  * - Le certificat auto-signé n'est accepté que s'il a l'empreinte vérifiée par l'utilisateur.
  * - Le micro n'est accordé qu'à cette origine, après la permission Android RECORD_AUDIO.
+ * - Le sélecteur de fichiers Android sert les <input type="file"> de la page (import audio).
  * - L'écran reste allumé tant que cet écran est affiché (donc pendant l'enregistrement).
  */
 class WebActivity : Activity() {
@@ -42,6 +45,7 @@ class WebActivity : Activity() {
         const val EXTRA_TOKEN = "token"
         const val EXTRA_PIN = "pin"
         private const val REQUEST_MIC = 1
+        private const val REQUEST_FILE = 2
 
         /** Erreurs de certificat tolérées quand l'empreinte correspond exactement à celle épinglée. */
         private val PINNABLE_ERRORS = setOf(
@@ -56,6 +60,7 @@ class WebActivity : Activity() {
     private lateinit var errorPanel: View
     private lateinit var errorText: TextView
     private var pendingMicRequest: PermissionRequest? = null
+    private var pendingFileCallback: ValueCallback<Array<Uri>>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +91,8 @@ class WebActivity : Activity() {
     override fun onDestroy() {
         pendingMicRequest?.deny()
         pendingMicRequest = null
+        pendingFileCallback?.onReceiveValue(null)
+        pendingFileCallback = null
         if (::webView.isInitialized) webView.destroy()
         super.onDestroy()
     }
@@ -194,6 +201,44 @@ class WebActivity : Activity() {
         override fun onPermissionRequestCanceled(request: PermissionRequest) {
             if (pendingMicRequest == request) pendingMicRequest = null
         }
+
+        /**
+         * <input type="file"> de la page (import d'un fichier audio). On ouvre le sélecteur de
+         * documents d'Android ; le fichier choisi est lu par la WebView et envoyé au seul PC.
+         * Pas de filtre de type : certains formats audio ont un type MIME inconnu du téléphone,
+         * la page vérifie elle-même l'extension.
+         */
+        override fun onShowFileChooser(
+            view: WebView,
+            filePathCallback: ValueCallback<Array<Uri>>,
+            fileChooserParams: WebChromeClient.FileChooserParams,
+        ): Boolean {
+            pendingFileCallback?.onReceiveValue(null)
+            pendingFileCallback = filePathCallback
+            val intent = Intent(Intent.ACTION_GET_CONTENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*")
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, fileChooserParams.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE)
+            try {
+                startActivityForResult(intent, REQUEST_FILE)
+            } catch (e: ActivityNotFoundException) {
+                pendingFileCallback = null
+                filePathCallback.onReceiveValue(null)
+                Toast.makeText(this@WebActivity, "Aucune application ne permet de choisir un fichier sur ce téléphone.",
+                    Toast.LENGTH_LONG).show()
+            }
+            return true
+        }
+    }
+
+    @Deprecated("API Activity historique, suffisante ici (pas de dépendance AndroidX).")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_FILE) return
+        val callback = pendingFileCallback ?: return
+        pendingFileCallback = null
+        // Toujours rappeler le callback (null si annulé), sinon la page ne peut plus rouvrir le sélecteur.
+        callback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
