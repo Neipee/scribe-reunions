@@ -71,7 +71,7 @@ jobs:
             keytool -genkeypair -noprompt -keystore "$keystore" -storetype PKCS12 \
               -alias "$alias" -keyalg RSA -keysize 3072 -validity 3650 \
               -storepass "$store_pass" -keypass "$key_pass" \
-              -dname "CN=Scribe - cle de TEST jetable (une par compilation), O=Scribe PoC"
+              -dname "CN=Scribe Test"
             echo "SIGNING_KIND=test" >> "$GITHUB_ENV"
           fi
           {

@@ -34,8 +34,8 @@ data class ServerAddress(val host: String, val port: Int, val token: String) {
         private val HOST_RE = Regex("^[A-Za-z0-9.-]{1,253}$")
 
         /**
-         * Accepte l'adresse complète affichée par le PC (https://192.168.1.20:8765/?t=…),
-         * ou une adresse seule (192.168.1.20, 192.168.1.20:8765) avec le jeton à part.
+         * Accepte l'adresse complète affichée par le PC (https://192.168.x.x:8765/?t=…),
+         * ou une adresse seule (192.168.x.x, 192.168.x.x:8765) avec le jeton à part.
          */
         fun parse(addressInput: String, tokenInput: String): ServerAddress {
             var text = addressInput.trim()
@@ -44,14 +44,14 @@ data class ServerAddress(val host: String, val port: Int, val token: String) {
             val uri = try {
                 URI(text)
             } catch (e: URISyntaxException) {
-                throw AddressException("Adresse illisible. Exemple : https://192.168.1.20:8765/?t=…")
+                throw AddressException("Adresse illisible. Exemple : https://192.168.x.x:8765/?t=…")
             }
             if (!"https".equals(uri.scheme, ignoreCase = true)) {
                 throw AddressException("L'adresse doit commencer par https:// : lancez le PC avec « python run.py --lan ».")
             }
             val host = uri.host?.removePrefix("[")?.removeSuffix("]")?.lowercase()
             if (host.isNullOrEmpty() || !(HOST_RE.matches(host) || host.contains(':'))) {
-                throw AddressException("Adresse du PC illisible. Exemple : https://192.168.1.20:8765/?t=…")
+                throw AddressException("Adresse du PC illisible. Exemple : https://192.168.x.x:8765/?t=…")
             }
             val port = if (uri.port == -1) DEFAULT_PORT else uri.port
 
