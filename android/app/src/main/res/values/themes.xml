@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Scribe" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">@color/scribe_primary</item>
+        <item name="android:colorPrimaryDark">@color/scribe_primary</item>
+        <item name="android:colorAccent">@color/scribe_primary</item>
+    </style>
+</resources>

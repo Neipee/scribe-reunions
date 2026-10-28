@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Trafic en clair interdit partout : la connexion au PC se fait uniquement en HTTPS.
+     Le certificat auto-signé du PC est accepté seulement par épinglage de son empreinte SHA-256
+     (voir Tls.kt et WebActivity.kt), jamais en ajoutant une autorité de confiance. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

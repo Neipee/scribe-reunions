@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Micro stylisé, dans la zone sûre des icônes adaptatives (66 dp centrés sur 108 dp). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30a8,8 0,0 1,8,8v16a8,8 0,0 1,-16,0v-16a8,8 0,0 1,8,-8z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="4"
+        android:pathData="M40,52a14,14 0,0 0,28,0M54,66v10M46,76h16" />
+</vector>
