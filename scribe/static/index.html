@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scribe réunions</title>
+<style>
+  :root { --fg:#1d2330; --muted:#667085; --line:#e4e7ec; --accent:#c8102e; --ok:#18794e; --warn:#b54708; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--fg); background:#f7f8fa; }
+  main { max-width:720px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; font-size:.95rem; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .center { text-align:center; }
+  #record { width:160px; height:160px; border-radius:50%; border:none; background:var(--accent); color:#fff;
+            font-size:1.1rem; font-weight:600; cursor:pointer; box-shadow:0 4px 14px rgba(200,16,46,.3); }
+  #record.recording { background:#fff; color:var(--accent); border:4px solid var(--accent); animation:pulse 1.5s infinite; }
+  #record:disabled { background:#d0d5dd; box-shadow:none; cursor:not-allowed; color:#fff; border:none; animation:none; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 14px rgba(200,16,46,.12); } }
+  #timer { font-variant-numeric:tabular-nums; font-size:1.6rem; margin-top:12px; min-height:2.2rem; }
+  #message { min-height:1.5rem; margin-top:8px; color:var(--muted); }
+  #message.error { color:var(--accent); font-weight:500; }
+  textarea { width:100%; min-height:200px; border:1px solid var(--line); border-radius:8px; padding:12px;
+             font:inherit; resize:vertical; }
+  .row { display:flex; gap:8px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+  button.secondary { background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 14px;
+                     font:inherit; cursor:pointer; }
+  button.secondary:disabled { color:var(--muted); cursor:not-allowed; }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 16px; margin:0 0 12px; font-size:.92rem; }
+  dt { color:var(--muted); } dd { margin:0; word-break:break-all; }
+  progress { width:100%; height:10px; }
+  .notice { font-size:.92rem; color:var(--warn); min-height:1.2rem; }
+  .ok { color:var(--ok); }
+  h2 { font-size:1.05rem; margin:0 0 12px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Scribe réunions</h1>
+  <p class="sub">Preuve de concept : l'audio et le texte restent sur cet ordinateur.</p>
+
+  <section class="card center">
+    <button id="record" disabled>Enregistrer</button>
+    <div id="timer"></div>
+    <div id="message">Démarrage…</div>
+    <progress id="jobProgress" class="hidden" max="1" value="0"></progress>
+  </section>
+
+  <section class="card hidden" id="resultCard">
+    <div class="row"><h2>Transcription</h2><button class="secondary" id="copy">Copier</button></div>
+    <textarea id="transcript" readonly></textarea>
+    <div id="resultMeta" class="sub" style="margin:8px 0 0"></div>
+  </section>
+
+  <section class="card">
+    <h2>Modèle</h2>
+    <dl>
+      <dt>Modèle</dt><dd id="mName">—</dd>
+      <dt>Révision</dt><dd id="mRev">—</dd>
+      <dt>Téléchargé le</dt><dd id="mDownloaded">—</dd>
+      <dt>Dernière vérification</dt><dd id="mCheck">—</dd>
+      <dt>Vérification auto</dt><dd id="mAuto">—</dd>
+    </dl>
+    <progress id="dlProgress" class="hidden" max="1" value="0"></progress>
+    <div id="dlText" class="sub hidden" style="margin:4px 0 8px"></div>
+    <div class="notice" id="notice"></div>
+    <button class="secondary" id="update">Mettre à jour le modèle</button>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
