@@ -11,12 +11,15 @@ import wave
 from pathlib import Path
 from typing import Callable
 
+import av
+
 import numpy as np
 
 from . import config
 
 # Avertissement générique de Transformers (longueur max par défaut), sans effet ici.
 warnings.filterwarnings("ignore", message="Using the model-agnostic default `max_length`")
+av.logging.set_level(av.logging.ERROR)  # pas de bruit FFmpeg dans la console
 
 
 class AudioError(ValueError):
@@ -45,6 +48,72 @@ def read_wav(data: bytes) -> np.ndarray:
     return audio
 
 
+# Conteneurs acceptés à l'import (noms FFmpeg). Tout le reste (listes de lecture HLS, concat,
+# images…) est refusé, même si l'extension du fichier est trompeuse.
+IMPORT_FORMATS = {"mp3", "wav", "mov,mp4,m4a,3gp,3g2,mj2", "ogg", "flac", "matroska,webm",
+                  "asf", "aac", "aiff", "amr", "caf"}
+# Seul le protocole « file » est autorisé : un fichier importé ne peut pas déclencher d'accès réseau.
+_OPEN_OPTIONS = {"protocol_whitelist": "file"}
+
+
+def _open_audio(path: Path):
+    """Ouvre un fichier audio/vidéo avec PyAV ; renvoie (conteneur, flux audio)."""
+    try:
+        container = av.open(str(path), mode="r", options=_OPEN_OPTIONS)
+    except (av.error.FFmpegError, OSError, ValueError) as exc:
+        raise AudioError("Format non pris en charge, ou fichier corrompu.") from exc
+    try:
+        if container.format.name not in IMPORT_FORMATS:
+            raise AudioError("Format non pris en charge.")
+        if not container.streams.audio:
+            raise AudioError("Ce fichier ne contient pas de piste audio.")
+    except BaseException:
+        container.close()
+        raise
+    return container, container.streams.audio[0]
+
+
+def probe_audio(path: Path) -> dict:
+    """Vérifie rapidement qu'un fichier est lisible ; renvoie sa durée (None si inconnue)."""
+    container, _ = _open_audio(path)
+    with container:
+        duration = container.duration / av.time_base if container.duration else None
+        return {"duration": duration, "container": container.format.name}
+
+
+def decode_audio(path: Path, max_seconds: float,
+                 on_progress: Callable[[float], None] | None = None) -> np.ndarray:
+    """Décode un fichier audio (ou l'audio d'une vidéo) -> int16 mono 16 kHz.
+
+    L'int16 divise par deux la mémoire d'un long fichier ; Transcriber convertit segment par segment.
+    """
+    container, stream = _open_audio(path)
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=config.SAMPLE_RATE)
+    raw, samples = bytearray(), 0
+
+    def collect(frames) -> None:
+        nonlocal samples
+        for frame in frames:
+            chunk = frame.to_ndarray().reshape(-1)
+            raw.extend(chunk.tobytes())
+            samples += len(chunk)
+        if samples > max_seconds * config.SAMPLE_RATE:
+            raise AudioError(f"Fichier trop long (maximum {max_seconds / 3600:g} h).")
+        if on_progress:
+            on_progress(samples / config.SAMPLE_RATE)
+
+    try:
+        with container:
+            for frame in container.decode(stream):
+                collect(resampler.resample(frame))
+            collect(resampler.resample(None))
+    except (av.error.FFmpegError, OSError, ValueError) as exc:
+        if isinstance(exc, AudioError):
+            raise
+        raise AudioError("Fichier audio corrompu ou illisible.") from exc
+    return np.frombuffer(raw, dtype="<i2")
+
+
 def split_segments(audio: np.ndarray, sr: int, target_s: int, search_s: int = 5,
                    window_s: float = 0.1) -> list[tuple[int, int]]:
     """Découpe en segments d'au plus target_s secondes, en coupant sur le passage
@@ -53,7 +122,7 @@ def split_segments(audio: np.ndarray, sr: int, target_s: int, search_s: int = 5,
     win = int(window_s * sr)
     while n - start > target_s * sr:
         lo, hi = start + (target_s - search_s) * sr, start + target_s * sr
-        frames = audio[lo:hi][: (hi - lo) // win * win].reshape(-1, win)
+        frames = audio[lo:hi][: (hi - lo) // win * win].reshape(-1, win).astype(np.float32)
         cut = lo + int((frames ** 2).mean(axis=1).argmin()) * win + win // 2
         segments.append((start, cut))
         start = cut
@@ -106,7 +175,10 @@ class Transcriber:
                         if s[1] - s[0] > sr // 10]
             texts = []
             for i, (a, b) in enumerate(segments, start=1):
-                inputs = self.processor(audio[a:b], sampling_rate=sr, language=language,
+                chunk = audio[a:b]
+                if chunk.dtype == np.int16:  # audio importé : conversion segment par segment
+                    chunk = chunk.astype(np.float32) / 32768.0
+                inputs = self.processor(chunk, sampling_rate=sr, language=language,
                                         return_tensors="pt")
                 inputs = inputs.to(self.model.device, dtype=self.model.dtype)
                 with torch.inference_mode():

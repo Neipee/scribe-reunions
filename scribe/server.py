@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import shutil
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import DATA_DIR, config
-from .asr import AudioError, Transcriber, is_memory_error, read_wav
+from .asr import AudioError, Transcriber, decode_audio, is_memory_error, probe_audio, read_wav
 from .model_manager import HubUnreachable, ModelManager
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -29,6 +30,8 @@ ACCESS_TOKEN: str | None = None
 # Noms d'hôte acceptés (anti « DNS rebinding ») ; run.py ajoute les IP locales en mode --lan.
 ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
 MAX_PENDING_JOBS = 1
+PENDING_STATES = ("receiving", "decoding", "queued", "running")
+IMPORT_CHUNK = 1024 * 1024
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 manager = ModelManager()
@@ -179,6 +182,8 @@ def get_status() -> dict:
         "progress": manager.progress,
         "auto_update": config.AUTO_UPDATE,
         "language": config.LANGUAGE,
+        "import": {"max_bytes": config.MAX_IMPORT_BYTES, "max_seconds": config.MAX_IMPORT_SECONDS,
+                   "extensions": list(config.IMPORT_EXTENSIONS)},
         "model": {
             "repo_id": manager.repo_id,
             "revision": s.get("revision"),
@@ -201,7 +206,7 @@ def update_model() -> dict:
     return {"started": True}
 
 
-def _run_job(job: dict, audio, folder: Path, language: str) -> None:
+def _run_job(job: dict, audio, folder: Path, language: str, extra_meta: dict | None = None) -> None:
     job["status"] = "running"
     start = time.perf_counter()
     try:
@@ -217,6 +222,7 @@ def _run_job(job: dict, audio, folder: Path, language: str) -> None:
             "processing_seconds": round(elapsed, 2),
             "rtf": round(elapsed / seconds, 3) if seconds else None,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **(extra_meta or {}),
         }
         (folder / "transcript.txt").write_text(text + "\n", encoding="utf-8")
         (folder / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False),
@@ -236,7 +242,7 @@ async def transcribe(file: UploadFile = File(...), language: str = Form(config.L
         raise HTTPException(503, "Le modèle n'est pas prêt : " + status["message"])
     if not LANGUAGE_RE.match(language):
         raise HTTPException(400, "Code de langue invalide.")
-    if sum(j["status"] in ("queued", "running") for j in jobs.values()) >= MAX_PENDING_JOBS:
+    if sum(j["status"] in PENDING_STATES for j in jobs.values()) >= MAX_PENDING_JOBS:
         raise HTTPException(429, "Une transcription est déjà en cours : attendez qu'elle se termine.")
     data = await file.read(config.MAX_UPLOAD_BYTES + 1)
     if len(data) > config.MAX_UPLOAD_BYTES:
@@ -258,6 +264,90 @@ async def transcribe(file: UploadFile = File(...), language: str = Form(config.L
     jobs[job_id] = job
     threading.Thread(target=_run_job, args=(job, audio, folder, language), daemon=True).start()
     return {"job_id": job_id, "audio_seconds": job["audio_seconds"]}
+
+
+def _safe_name(raw: str) -> tuple[str, str]:
+    """Nom d'affichage nettoyé et extension autorisée ('' si non prise en charge).
+
+    Le fichier est toujours stocké sous un nom fixe (original.<ext>) : le nom envoyé par le
+    client n'est jamais utilisé comme chemin.
+    """
+    name = re.sub(r"[^\w .()\-]", "_", Path(unquote(raw).replace("\\", "/")).name)[:100].strip(" .")
+    ext = Path(name).suffix.lower()
+    return name or "fichier", ext if ext in config.IMPORT_EXTENSIONS else ""
+
+
+def _run_import_job(job: dict, original: Path, folder: Path, language: str, meta: dict) -> None:
+    job["status"] = "decoding"
+    try:
+        audio = decode_audio(original, config.MAX_IMPORT_SECONDS,
+                             on_progress=lambda s: job.update(decoded_seconds=round(s)))
+        if len(audio) < config.SAMPLE_RATE // 2:
+            raise AudioError("Fichier trop court (moins d'une demi-seconde d'audio).")
+    except Exception as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        job["status"] = "error"
+        job["error"] = (str(exc) if isinstance(exc, AudioError) else
+                        "Mémoire insuffisante pour décoder ce fichier." if is_memory_error(exc)
+                        else f"Erreur de décodage : {exc}")
+        return
+    job["audio_seconds"] = round(len(audio) / config.SAMPLE_RATE, 1)
+    _run_job(job, audio, folder, language, meta)
+
+
+@app.post("/api/import")
+async def import_audio(request: Request, language: str = config.LANGUAGE) -> dict:
+    """Reçoit un fichier audio/vidéo en flux brut (corps de la requête), l'écrit dans data/ puis
+    le décode et le transcrit en arrière-plan. Le nom d'origine arrive dans l'en-tête X-Filename."""
+    if not transcriber.ready:
+        raise HTTPException(503, "Le modèle n'est pas prêt : " + status["message"])
+    if not LANGUAGE_RE.match(language):
+        raise HTTPException(400, "Code de langue invalide.")
+    name, ext = _safe_name(request.headers.get("x-filename", ""))
+    if not ext:
+        raise HTTPException(415, "Format non pris en charge. Formats acceptés : "
+                                 + ", ".join(config.IMPORT_EXTENSIONS) + ".")
+    limit_mb = config.MAX_IMPORT_BYTES // 2**20
+    too_big = HTTPException(413, f"Fichier trop volumineux (maximum {limit_mb} Mo).")
+    if int(request.headers.get("content-length") or 0) > config.MAX_IMPORT_BYTES:
+        raise too_big
+    # Réservation de l'unique place avant tout `await` : deux envois simultanés ne passent pas.
+    if sum(j["status"] in PENDING_STATES for j in jobs.values()) >= MAX_PENDING_JOBS:
+        raise HTTPException(429, "Une transcription est déjà en cours : attendez qu'elle se termine.")
+    job_id = uuid.uuid4().hex
+    job = {"id": job_id, "status": "receiving", "done": 0, "total": 0, "audio_seconds": None}
+    jobs[job_id] = job
+    folder = DATA_DIR / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    original = folder / f"original{ext}"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        size = 0
+        with original.open("wb") as out:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > config.MAX_IMPORT_BYTES:
+                    raise too_big
+                await run_in_threadpool(out.write, chunk)
+        if size == 0:
+            raise HTTPException(400, "Le fichier est vide.")
+        info = await run_in_threadpool(probe_audio, original)
+        if info["duration"] and info["duration"] > config.MAX_IMPORT_SECONDS:
+            raise HTTPException(413, f"Fichier trop long (maximum "
+                                     f"{config.MAX_IMPORT_SECONDS / 3600:g} h d'audio).")
+    except AudioError as exc:
+        jobs.pop(job_id, None)
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(400 if "piste audio" in str(exc) else 415, str(exc)) from exc
+    except BaseException:  # y compris déconnexion du client : on ne garde rien d'incomplet
+        jobs.pop(job_id, None)
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    job["audio_seconds"] = round(info["duration"], 1) if info["duration"] else None
+    meta = {"source": "import", "original_name": name, "original_bytes": size,
+            "container": info["container"], "audio_file": original.name}
+    threading.Thread(target=_run_import_job, args=(job, original, folder, language, meta),
+                     daemon=True, name="import").start()
+    return {"job_id": job_id, "audio_seconds": job["audio_seconds"], "size": size}
 
 
 @app.get("/api/jobs/{job_id}")

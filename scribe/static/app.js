@@ -1,6 +1,6 @@
 "use strict";
-// Enregistre le micro en PCM 16 kHz mono dans le navigateur, envoie un WAV au serveur local,
-// puis affiche la transcription. Aucune autre destination réseau.
+// Enregistre le micro en PCM 16 kHz mono dans le navigateur, ou importe un fichier audio existant,
+// l'envoie au serveur local, puis affiche la transcription. Aucune autre destination réseau.
 
 const TARGET_RATE = 16000;
 const $ = (id) => document.getElementById(id);
@@ -9,6 +9,9 @@ const recordBtn = $("record"), message = $("message"), timer = $("timer");
 let modelReady = false;
 let recorder = null; // { ctx, stream, source, node, chunks, tick, wakeLock }
 let transcribing = false;
+let importLimits = { max_bytes: 500 * 2 ** 20, max_seconds: 4 * 3600, extensions: [] };
+let pickedFile = null;
+const dropZone = $("drop"), fileInput = $("file"), importBtn = $("importBtn");
 
 function say(text, isError = false) {
   message.textContent = text;
@@ -112,24 +115,64 @@ async function stopRecording() {
 }
 
 async function sendForTranscription(wav) {
-  transcribing = true;
-  refreshButton();
-  const bar = $("jobProgress");
-  say("Envoi de l'audio au serveur local…");
-  try {
+  await runTranscription(async () => {
+    say("Envoi de l'audio au serveur local…");
     const form = new FormData();
     form.append("file", wav, "audio.wav");
     const res = await fetch("/api/transcribe", { method: "POST", body: form });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.detail || "Erreur serveur " + res.status);
-    bar.classList.remove("hidden"); bar.value = 0;
+    return body;
+  });
+}
+
+// Envoie le fichier brut (sans le charger en mémoire) avec une progression d'envoi.
+function uploadFile(file) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/import");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name));
+    const bar = $("jobProgress");
+    bar.classList.remove("hidden"); bar.max = file.size; bar.value = 0;
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      bar.value = e.loaded;
+      say(`Envoi du fichier au serveur local… ${Math.round((100 * e.loaded) / e.total)} %`);
+    };
+    xhr.onerror = () => reject(new Error("Failed to fetch"));
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* corps non JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.detail || xhr.responseText || "Erreur serveur " + xhr.status));
+    };
+    xhr.send(file);
+  });
+}
+
+// `start` envoie l'audio et renvoie { job_id, audio_seconds } ; on suit ensuite la tâche.
+async function runTranscription(start) {
+  transcribing = true;
+  refreshButton();
+  const bar = $("jobProgress");
+  try {
+    const body = await start();
+    bar.classList.remove("hidden"); bar.value = 0; bar.removeAttribute("max");
     while (true) {
       await new Promise((ok) => setTimeout(ok, 1000));
-      const job = await (await fetch("/api/jobs/" + body.job_id)).json();
+      const res = await fetch("/api/jobs/" + body.job_id);
+      if (!res.ok) throw new Error("Suivi de la transcription impossible (erreur " + res.status + ").");
+      const job = await res.json();
       if (job.status === "error") throw new Error(job.error);
       if (job.status === "done") { showResult(job); break; }
+      if (job.status === "decoding") {
+        say("Décodage du fichier audio…" + (job.decoded_seconds ? ` (${fmtDuration(job.decoded_seconds)})` : ""));
+        continue;
+      }
       if (job.total) { bar.max = job.total; bar.value = job.done; }
-      say(`Transcription en cours (${fmtDuration(body.audio_seconds)} d'audio)` +
+      const secs = job.audio_seconds || body.audio_seconds;
+      say(`Transcription en cours${secs ? ` (${fmtDuration(secs)} d'audio)` : ""}` +
           (job.total ? ` — segment ${job.done}/${job.total}` : "…"));
     }
   } catch (err) {
@@ -157,9 +200,89 @@ $("copy").addEventListener("click", async () => {
   catch { $("transcript").select(); say("Sélectionnez le texte puis copiez-le."); }
 });
 
+// --- Import d'un fichier ------------------------------------------------------------------
+function fmtSize(bytes) {
+  return bytes >= 2 ** 30 ? (bytes / 2 ** 30).toFixed(2) + " Go"
+    : bytes >= 2 ** 20 ? (bytes / 2 ** 20).toFixed(1) + " Mo" : Math.max(1, Math.round(bytes / 1024)) + " Ko";
+}
+
+function clearPicked() {
+  pickedFile = null;
+  fileInput.value = "";
+  $("fileInfo").classList.add("hidden");
+  importBtn.classList.add("hidden");
+  $("clearFile").classList.add("hidden");
+}
+
+// Durée lue par le navigateur (facultative : certains formats ne sont pas lisibles côté page).
+function readDuration(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file), media = document.createElement("audio");
+    const done = (d) => { URL.revokeObjectURL(url); resolve(Number.isFinite(d) ? d : null); };
+    media.preload = "metadata";
+    media.onloadedmetadata = () => done(media.duration);
+    media.onerror = () => done(null);
+    setTimeout(() => done(null), 4000);
+    media.src = url;
+  });
+}
+
+async function pickFile(file) {
+  if (!file || recorder || transcribing) return;
+  clearPicked();
+  const ext = "." + (file.name.split(".").pop() || "").toLowerCase();
+  if (importLimits.extensions.length && !importLimits.extensions.includes(ext)) {
+    say("Format non pris en charge (" + ext + "). Formats acceptés : " +
+        importLimits.extensions.join(", ") + ".", true);
+    return;
+  }
+  if (file.size === 0) { say("Le fichier est vide.", true); return; }
+  if (file.size > importLimits.max_bytes) {
+    say(`Fichier trop volumineux (${fmtSize(file.size)}) : maximum ${fmtSize(importLimits.max_bytes)}.`, true);
+    return;
+  }
+  pickedFile = file;
+  const info = $("fileInfo");
+  info.textContent = `${file.name} — ${fmtSize(file.size)}`;
+  info.classList.remove("hidden");
+  importBtn.classList.remove("hidden");
+  $("clearFile").classList.remove("hidden");
+  say("Fichier prêt. Appuyez sur « Transcrire ce fichier ».");
+  const duration = await readDuration(file);
+  if (pickedFile !== file) return;
+  if (duration) {
+    info.textContent += ` — ${fmtDuration(duration)}`;
+    if (duration > importLimits.max_seconds) {
+      say(`Fichier trop long (${fmtDuration(duration)}) : maximum ${importLimits.max_seconds / 3600} h.`, true);
+      clearPicked();
+    }
+  }
+}
+
+fileInput.addEventListener("change", () => pickFile(fileInput.files[0]));
+importBtn.addEventListener("click", () => {
+  const file = pickedFile;
+  if (file) runTranscription(() => uploadFile(file)).then(clearPicked);
+});
+$("clearFile").addEventListener("click", () => { clearPicked(); say("Prêt."); });
+for (const type of ["dragenter", "dragover"]) {
+  dropZone.addEventListener(type, () => { if (!fileInput.disabled) dropZone.classList.add("over"); });
+}
+for (const type of ["dragleave", "drop"]) {
+  dropZone.addEventListener(type, () => dropZone.classList.remove("over"));
+}
+dropZone.addEventListener("drop", (e) => { if (!fileInput.disabled) pickFile(e.dataTransfer.files[0]); });
+// Évite que le navigateur ouvre le fichier s'il est lâché à côté de la zone.
+for (const type of ["dragover", "drop"]) window.addEventListener(type, (e) => e.preventDefault());
+
 // --- État du modèle -----------------------------------------------------------------------
 function refreshButton() {
   recordBtn.disabled = !recorder && (!modelReady || transcribing);
+  const busy = !!recorder || transcribing;
+  importBtn.disabled = !modelReady || busy;
+  $("clearFile").disabled = transcribing;
+  fileInput.disabled = busy;
+  dropZone.classList.toggle("disabled", busy);
 }
 
 async function refreshStatus() {
@@ -167,6 +290,9 @@ async function refreshStatus() {
   try { s = await (await fetch("/api/status")).json(); }
   catch { if (!recorder) say("Serveur local injoignable.", true); return; }
   const m = s.model;
+  if (s.import) importLimits = s.import;
+  $("dropHint").textContent = "mp3, wav, m4a, ogg, flac, mp4… " +
+    `(max ${Math.round(importLimits.max_bytes / 2 ** 20)} Mo, ${importLimits.max_seconds / 3600} h)`;
   const wasReady = modelReady;
   modelReady = s.phase === "ready";
   $("mName").textContent = m.repo_id;
@@ -193,7 +319,7 @@ async function refreshStatus() {
   upd.textContent = m.revision ? "Mettre à jour le modèle" : "Télécharger le modèle";
   if (!recorder && !transcribing) {
     if (!modelReady) say(s.message, s.phase === "error" || s.phase === "absent");
-    else if (!wasReady) say("Prêt. Appuyez sur Enregistrer.");
+    else if (!wasReady) say("Prêt. Appuyez sur Enregistrer ou importez un fichier audio.");
   }
   refreshButton();
 }

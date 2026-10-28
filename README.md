@@ -54,6 +54,25 @@ Chaque enregistrement est gardé dans `data/<date-heure>/` :
 - `transcript.txt` : le texte ;
 - `meta.json` : les durées et la révision du modèle.
 
+## Importer un fichier audio
+
+Au lieu d'enregistrer, on peut transcrire un fichier existant (enregistrement d'un dictaphone, d'un
+téléphone, d'une visioconférence…) :
+
+1. Dans la carte **Importer un fichier audio**, glisser le fichier dans la zone en pointillés, ou cliquer dessus pour le choisir.
+2. La page affiche le nom, la taille et la durée. Appuyer sur **Transcrire ce fichier**.
+3. La progression s'affiche (envoi, décodage, puis segment par segment), puis le texte, comme pour un enregistrement.
+
+- **Formats.** mp3, wav, m4a, aac, ogg, oga, opus, flac, webm, wma, aiff, aif, amr, 3gp, et l'audio d'une vidéo (mp4, m4v, mov, mkv). Le format est reconnu d'après le contenu du fichier, pas d'après son extension ; en cas de doute, le serveur refuse le fichier avec un message clair.
+- **Limites** (réglables par variables d'environnement) : `SCRIBE_MAX_IMPORT_MB` (500 Mo par défaut) et `SCRIBE_MAX_IMPORT_HOURS` (4 h par défaut). Exemple : `$env:SCRIBE_MAX_IMPORT_MB = "1000"; .venv\Scripts\python run.py`. Un fichier de 4 h demande environ 0,5 Go de RAM de plus pour le décodage, et environ 70 min de calcul (0,3 × la durée).
+- **Une seule transcription à la fois**, enregistrement ou import : un second envoi est refusé avec un message.
+- **Stockage.** Le fichier d'origine est copié dans `data/<date-heure>/original.<extension>`, à côté de `transcript.txt` et `meta.json` (qui garde le nom d'origine, nettoyé). Si le fichier est illisible, le dossier est supprimé.
+- **Décodage.** Bibliothèque [PyAV](https://pyav.basswood.io) (`av`, licence BSD-3), installée dans `.venv/` avec les autres dépendances. Ses roues Windows embarquent FFmpeg : il n'y a rien à installer sur le système. Ce FFmpeg est compilé avec des composants GPL (x264, x265) : sans conséquence pour un usage local, mais à vérifier avant toute redistribution de l'application.
+- **Sécurité.** Mêmes contrôles que pour l'enregistrement (nom d'hôte, origine, jeton en mode `--lan`). Le nom envoyé n'est jamais utilisé comme chemin ; le contenu n'est jamais exécuté ; seul le protocole `file` est autorisé au décodage, donc un fichier piégé (liste de lecture HLS, etc.) ne peut déclencher aucun accès réseau.
+- **Qualité.** Les formats avec perte (mp3, aac, opus…) peuvent changer un mot ou la ponctuation par rapport au WAV d'origine. Mesures dans docs/POC.md.
+
+Tests (serveur lancé, modèle chargé) : `.venv\Scripts\python scripts\test_import.py` ; refus et sécurité sans modèle : `.venv\Scripts\python scripts\test_import.py --refus`. Les fichiers de test sont générés à la volée dans un dossier temporaire.
+
 ## Lancer pour l'utiliser depuis un téléphone
 
 Le navigateur d'un téléphone n'autorise le micro qu'en HTTPS. Le mode `--lan` génère un certificat
@@ -155,6 +174,6 @@ Le premier script génère un échantillon français avec la voix Windows locale
 - **Pas de texte en direct.** La transcription se fait à l'arrêt de l'enregistrement. Comptez environ 0,3 × la durée de l'audio sur un i7 portable de 2021, soit environ 18 min pour 1 h.
 - **Mémoire.** Il faut environ 3,1 Go de RAM pour le modèle, et l'enregistrement est gardé en mémoire dans le navigateur, environ 115 Mo par heure.
 - **Navigateur.** Si l'onglet est fermé ou rechargé pendant l'enregistrement, l'audio est perdu.
-- **Format.** Seul le WAV PCM 16 bits est accepté par le serveur. La page web le produit elle-même.
+- **Format.** L'enregistrement est envoyé en WAV PCM 16 bits, produit par la page elle-même. Les fichiers importés peuvent être dans les formats listés plus haut.
 - **Qualité.** Elle n'a été mesurée que sur une voix de synthèse propre. Elle reste à évaluer sur de vraies réunions : bruit, plusieurs voix, micro de téléphone.
 - **Fonctions absentes.** Il n'y a ni synthèse, ni historique, ni identification des intervenants, ni comptes (hors du périmètre du PoC).

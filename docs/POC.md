@@ -63,7 +63,7 @@ Navigateur (PC ou téléphone)                     PC
 
 Le choix recommandé dans la demande est validé : un serveur Python local et une page web unique, servie au PC (localhost) et au téléphone (HTTPS sur le réseau local).
 
-- **Aucun ffmpeg.** Le navigateur produit lui-même un WAV 16 kHz mono : il capte le micro, rééchantillonne à la volée et encode, en JavaScript.
+- **Aucun ffmpeg à installer.** Le navigateur produit lui-même un WAV 16 kHz mono : il capte le micro, rééchantillonne à la volée et encode, en JavaScript. Pour l'import de fichiers (mp3, m4a, ogg, flac, mp4…), le serveur décode avec PyAV, dont les roues embarquent FFmpeg (voir la section 8).
 - **Longs enregistrements.** L'audio est découpé en segments d'environ 30 s, coupés sur le passage le plus silencieux, ce qui borne la mémoire de calcul.
 - **Une transcription à la fois.** Un deuxième envoi pendant un calcul reçoit un refus explicite.
 - **Mode téléphone (`--lan`).** Certificat auto-signé généré en Python (`cryptography`, sans OpenSSL système) et jeton d'accès aléatoire. Par défaut, l'application n'écoute que sur 127.0.0.1.
@@ -185,3 +185,12 @@ Total : **environ 2 à 4 semaines** pour une personne. La logique de gestion du 
    - **Mode PC + téléphone-micro**, ce PoC, utilisable tout de suite ;
    - ou **transcription embarquée sur le téléphone** (section 6).
 3. **Données réelles.** Fournir des enregistrements de réunions autorisés pour mesurer la qualité réelle.
+
+## 8. Import d'un fichier audio (ajout)
+
+Ajouté après le PoC : `POST /api/import` reçoit le fichier brut (en flux, écrit sur disque dans `data/` sans le charger en mémoire), le valide (durée et format lus dans l'en-tête), puis le décode et le transcrit en arrière-plan avec le même moteur que l'enregistrement. Mode d'emploi, formats et limites : voir le README.
+
+- **Décodage : PyAV.** Choisi plutôt que soundfile + une autre bibliothèque : une seule dépendance, des roues Windows autonomes (FFmpeg embarqué, aucun droit administrateur), tous les formats courants y compris l'audio d'un mp4. Sortie : int16 mono 16 kHz (460 Mo pour 4 h), converti segment par segment.
+- **Mesures** (échantillon de 75 s, i7 portable, CPU) : l'import d'un WAV, mp3, flac, wma, ogg, opus, m4a, aac, webm ou mp4 (avec vidéo) produit les mêmes 181 mots que l'enregistrement. WAV, WAV 44,1 kHz stéréo, mp3, flac et wma donnent un texte strictement identique. Les autres formats ne diffèrent que par la ponctuation ou une majuscule (par exemple « mars. L'équipe » devenu « mars, l'équipe »). Temps de calcul : environ 0,2 à 0,3 × la durée ; le premier import après démarrage est plus lent (échauffement du modèle).
+- **Refus vérifiés :** fichier vide, texte renommé en .mp3, extension inconnue, trop gros (avec ou sans `Content-Length`), nom d'hôte ou origine étrangers, liste HLS déguisée en .mp3, nom de fichier avec traversée de chemin, deuxième import ou enregistrement pendant un import.
+- **Non testé :** fichiers de plusieurs heures ou de plusieurs centaines de Mo (seuls 75 s ont été importés ; la limite de taille a été testée avec un seuil abaissé à 1 Mo), amr, aiff, 3gp, mov, mkv, oga ; navigateurs autres que Chromium ; glisser-déposer réel (testé par sélecteur de fichier uniquement).
