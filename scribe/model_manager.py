@@ -42,8 +42,11 @@ def _file_size(path: str) -> int:
 
 
 def _dir_size(path: Path) -> int:
+    root_dir = str(path.resolve())
+    if os.name == "nt":  # les fichiers temporaires du hub dépassent souvent 260 caractères
+        root_dir = "\\\\?\\" + root_dir
     total = 0
-    for root, _dirs, files in os.walk(path):
+    for root, _dirs, files in os.walk(root_dir):
         for name in files:
             try:
                 total += _file_size(os.path.join(root, name))
@@ -59,6 +62,7 @@ class ModelManager:
         self.state_file = self.base / "state.json"
         self.api = HfApi()
         self._download_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self.progress: dict | None = None  # {"done": octets, "total": octets}
 
     # --- état local -------------------------------------------------------
@@ -70,12 +74,19 @@ class ModelManager:
             return {}
 
     def _save_state(self, **changes) -> dict:
-        new_state = {**self.state(), "repo_id": self.repo_id, **changes}
-        self.base.mkdir(parents=True, exist_ok=True)
-        tmp = self.state_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(new_state, indent=2), encoding="utf-8")
-        tmp.replace(self.state_file)
-        return new_state
+        with self._state_lock:
+            new_state = {**self.state(), "repo_id": self.repo_id, **changes}
+            self.base.mkdir(parents=True, exist_ok=True)
+            tmp = self.state_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(new_state, indent=2), encoding="utf-8")
+            tmp.replace(self.state_file)
+            return new_state
+
+    def restore(self, snapshot: dict) -> None:
+        """Remet la révision active telle qu'elle était (retour arrière après un échec)."""
+        self._save_state(revision=snapshot.get("revision"),
+                         revision_date=snapshot.get("revision_date"),
+                         downloaded_at=snapshot.get("downloaded_at"))
 
     def local_path(self) -> Path | None:
         revision = self.state().get("revision")

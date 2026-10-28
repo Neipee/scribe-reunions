@@ -6,6 +6,7 @@
 
 import argparse
 import secrets
+import socket
 
 import uvicorn
 
@@ -27,6 +28,7 @@ def main() -> None:
     if args.lan:
         cert, key = ensure_certificate(force=args.new_cert)
         server.ACCESS_TOKEN = secrets.token_urlsafe(12)
+        server.ALLOWED_HOSTS.update(lan_addresses() + [socket.gethostname().lower()])
         options.update(host="0.0.0.0", ssl_certfile=str(cert), ssl_keyfile=str(key))
         print("\nAccès depuis un téléphone sur le même réseau (accepter l'avertissement de certificat) :")
         for ip in lan_addresses() or ["<adresse-IP-du-PC>"]:

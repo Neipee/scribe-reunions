@@ -6,6 +6,7 @@ import gc
 import io
 import os
 import threading
+import warnings
 import wave
 from pathlib import Path
 from typing import Callable
@@ -13,6 +14,9 @@ from typing import Callable
 import numpy as np
 
 from . import config
+
+# Avertissement générique de Transformers (longueur max par défaut), sans effet ici.
+warnings.filterwarnings("ignore", message="Using the model-agnostic default `max_length`")
 
 
 class AudioError(ValueError):
@@ -29,6 +33,8 @@ def read_wav(data: bytes) -> np.ndarray:
         raise AudioError(f"Fichier WAV illisible : {exc}") from exc
     if width != 2:
         raise AudioError("Seul le WAV PCM 16 bits est accepté.")
+    if not 8_000 <= rate <= 192_000 or not 1 <= channels <= 8:
+        raise AudioError("En-tête WAV invalide (fréquence ou nombre de canaux).")
     audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
     if channels > 1:
         audio = audio.reshape(-1, channels).mean(axis=1)
@@ -111,4 +117,4 @@ class Transcriber:
                 texts.append(text.strip())
                 if on_progress:
                     on_progress(i, len(segments))
-            return " ".join(t for t in texts if t)
+            return " ".join(" ".join(texts).split())

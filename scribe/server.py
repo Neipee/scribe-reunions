@@ -10,8 +10,10 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -24,6 +26,9 @@ LANGUAGE_RE = re.compile(r"^(auto|[a-z]{2}(-[A-Z]{2})?)$")
 
 # Jeton d'accès, posé par run.py en mode réseau local (--lan). None = pas de contrôle.
 ACCESS_TOKEN: str | None = None
+# Noms d'hôte acceptés (anti « DNS rebinding ») ; run.py ajoute les IP locales en mode --lan.
+ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
+MAX_PENDING_JOBS = 1
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 manager = ModelManager()
@@ -71,16 +76,18 @@ def _install_latest() -> None:
         _set(notice="Téléchargement de la nouvelle révision en arrière-plan ; "
                     "l'ancienne reste utilisable en attendant.")
     path = manager.download(remote["revision"])
-    previous = manager.activate(remote["revision"], remote["date"])
+    snapshot = manager.state()
+    manager.activate(remote["revision"], remote["date"])
     try:
         _load(path)
     except Exception:
-        if previous and previous != remote["revision"]:
-            manager.activate(previous, None)  # retour arrière sur la révision qui marchait
+        manager.restore(snapshot)  # retour arrière sur la révision qui marchait
+        manager.remove_revision(remote["revision"])
+        if local:
             _load(manager.local_path())
         raise
-    if previous and previous != remote["revision"]:
-        manager.remove_revision(previous)
+    if local:
+        manager.remove_revision(local)
     _set(notice="Modèle mis à jour." if not first_install else "Modèle téléchargé.")
 
 
@@ -134,11 +141,18 @@ def _startup() -> None:
 
 
 @app.middleware("http")
-async def _check_token(request: Request, call_next):
+async def _check_access(request: Request, call_next):
+    # Empêche une autre page web ouverte dans le navigateur d'utiliser l'API locale.
+    host = request.headers.get("host", "")
+    if urlsplit("//" + host).hostname not in ALLOWED_HOSTS:
+        return PlainTextResponse("Hôte non autorisé.", status_code=403)
+    origin = request.headers.get("origin")
+    if request.method != "GET" and origin and urlsplit(origin).netloc != host:
+        return PlainTextResponse("Origine non autorisée.", status_code=403)
     if not ACCESS_TOKEN:
         return await call_next(request)
     supplied = request.query_params.get("t") or request.cookies.get("scribe_token") or ""
-    if not secrets.compare_digest(supplied, ACCESS_TOKEN):
+    if not secrets.compare_digest(supplied.encode(), ACCESS_TOKEN.encode()):
         return PlainTextResponse("Accès refusé : ouvrez l'adresse complète affichée dans la "
                                  "console du PC (avec ?t=…).", status_code=403)
     response = await call_next(request)
@@ -193,25 +207,26 @@ def _run_job(job: dict, audio, folder: Path, language: str) -> None:
     try:
         text = transcriber.transcribe(audio, language,
                                       on_progress=lambda i, n: job.update(done=i, total=n))
+        elapsed = time.perf_counter() - start
+        seconds = len(audio) / config.SAMPLE_RATE
+        meta = {
+            "model": manager.repo_id,
+            "revision": manager.state().get("revision"),
+            "language": language,
+            "audio_seconds": round(seconds, 2),
+            "processing_seconds": round(elapsed, 2),
+            "rtf": round(elapsed / seconds, 3) if seconds else None,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        (folder / "transcript.txt").write_text(text + "\n", encoding="utf-8")
+        (folder / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                                          encoding="utf-8")
     except Exception as exc:
         job["status"] = "error"
         job["error"] = ("Mémoire insuffisante pendant la transcription : fermez des applications "
                         "ou faites des enregistrements plus courts." if is_memory_error(exc)
                         else f"Erreur de transcription : {exc}")
         return
-    elapsed = time.perf_counter() - start
-    seconds = len(audio) / config.SAMPLE_RATE
-    meta = {
-        "model": manager.repo_id,
-        "revision": manager.state().get("revision"),
-        "language": language,
-        "audio_seconds": round(seconds, 2),
-        "processing_seconds": round(elapsed, 2),
-        "rtf": round(elapsed / seconds, 3) if seconds else None,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    (folder / "transcript.txt").write_text(text + "\n", encoding="utf-8")
-    (folder / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     job.update(status="done", text=text, meta=meta, folder=folder.name)
 
 
@@ -221,11 +236,13 @@ async def transcribe(file: UploadFile = File(...), language: str = Form(config.L
         raise HTTPException(503, "Le modèle n'est pas prêt : " + status["message"])
     if not LANGUAGE_RE.match(language):
         raise HTTPException(400, "Code de langue invalide.")
+    if sum(j["status"] in ("queued", "running") for j in jobs.values()) >= MAX_PENDING_JOBS:
+        raise HTTPException(429, "Une transcription est déjà en cours : attendez qu'elle se termine.")
     data = await file.read(config.MAX_UPLOAD_BYTES + 1)
     if len(data) > config.MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Enregistrement trop volumineux.")
     try:
-        audio = read_wav(data)
+        audio = await run_in_threadpool(read_wav, data)
     except AudioError as exc:
         raise HTTPException(400, str(exc)) from exc
     if len(audio) < config.SAMPLE_RATE // 2:
