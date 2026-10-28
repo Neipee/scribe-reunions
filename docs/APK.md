@@ -25,7 +25,7 @@ allumé et afficher des erreurs lisibles.
 | `ServerAddress.kt` | Lecture de la saisie : adresse complète `https://IP:8765/?t=…` ou adresse + jeton ; port 8765 par défaut ; HTTPS obligatoire. |
 | `Tls.kt` | Lecture de l'empreinte du certificat, connexion avec certificat épinglé, test du jeton (`/api/status?t=…`), messages d'erreur. |
 | `SetupActivity.kt` | Écran de configuration, confirmation de l'empreinte, mémorisation. |
-| `WebActivity.kt` | WebView, filtrage des requêtes, certificat, micro, écran allumé. |
+| `WebActivity.kt` | WebView, filtrage des requêtes, certificat, micro, sélecteur de fichiers, écran allumé. |
 | `Prefs.kt` | Stockage privé (`SharedPreferences`) et marges des barres système (Android 15). |
 
 ## Décisions de sécurité
@@ -57,6 +57,13 @@ Aucun `TrustManager` n'accepte tout, et aucune autorité n'est ajoutée au magas
 
 **Trafic en clair interdit** (`usesCleartextTraffic="false"`, `network_security_config.xml`). Le PoC
 sert déjà en HTTPS en mode `--lan`, le HTTP n'est donc jamais nécessaire.
+
+**Import de fichier.** L'appli n'a pas d'écran d'import : c'est le `<input type="file">` de la page
+du PC. `onShowFileChooser` ouvre le sélecteur de documents d'Android (`ACTION_GET_CONTENT`, sans filtre de
+type, car certains formats audio n'ont pas de type MIME connu du téléphone : la page vérifie l'extension).
+Le fichier choisi est lu par la WebView et envoyé uniquement au PC (`/api/import`). Aucune permission
+de stockage n'est demandée. `allowContentAccess` reste désactivé : il concerne le chargement d'URL
+`content://` par la page, pas la lecture du fichier choisi (à confirmer sur téléphone, voir plus bas).
 
 **Micro.** `RECORD_AUDIO` est demandé à l'exécution, au premier appui sur Enregistrer.
 `onPermissionRequest` n'accorde que `RESOURCE_AUDIO_CAPTURE`, et seulement à l'origine configurée.
@@ -121,10 +128,13 @@ Rien de ce qui suit n'a pu être testé ici : il n'y a ni téléphone ni émulat
    accepté par `onReceivedSslError`, sans écran blanc ?
 5. Micro : demande Android, puis Enregistrer / Arrêter et transcription affichée. Vérifier que
    l'AudioWorklet fonctionne dans la WebView.
-6. Erreurs :
+6. Import : toucher la zone « Importer un fichier audio » ouvre le sélecteur Android, le nom et la taille s'affichent, la durée
+   est lue, puis « Transcrire ce fichier » envoie le fichier avec la barre de progression. Si le fichier
+   n'est pas lisible par la WebView, activer `allowContentAccess` est la piste à tester en premier.
+7. Erreurs :
    - PC éteint : « PC injoignable » ;
    - mauvais jeton : « Jeton refusé » ;
    - micro refusé ;
    - PC relancé avec `--new-cert` : « Certificat du PC changé ».
-7. Rotation de l'écran pendant un enregistrement (elle ne doit pas l'interrompre) ; écran qui reste allumé.
-8. Android 15 : marges des barres système (contenu non masqué).
+8. Rotation de l'écran pendant un enregistrement (elle ne doit pas l'interrompre) ; écran qui reste allumé.
+9. Android 15 : marges des barres système (contenu non masqué).

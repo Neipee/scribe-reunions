@@ -119,7 +119,8 @@ de sécurité : [docs/APK.md](docs/APK.md).
 5. Au premier raccordement, l'appli affiche l'empreinte du certificat du PC. La comparer avec celle
    de la console (au moins les premiers et derniers groupes), puis appuyer sur
    **Identiques, faire confiance**. Ne pas accepter si elles diffèrent.
-6. Appuyer sur **Enregistrer** et autoriser le micro quand Android le demande.
+6. Appuyer sur **Enregistrer** et autoriser le micro quand Android le demande. L'import d'un
+   fichier audio de la page passe par le sélecteur de fichiers d'Android.
 
 Facultatif : comparer l'empreinte SHA-256 de l'APK avec celle indiquée dans la release (fichier
 `.sha256`).
