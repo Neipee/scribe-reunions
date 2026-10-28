@@ -1,0 +1,9 @@
+# Environnement Python isolé
+.venv/
+__pycache__/
+*.pyc
+
+# Modèle téléchargé, cache Hugging Face, enregistrements et transcriptions : jamais dans git
+models/
+data/
+certs/
