@@ -1,0 +1,9 @@
+Bonjour à tous, merci d'être présents pour ce point d'avancement du projet. Nous avons trois sujets à l'ordre du jour : le planning, le budget et le recrutement.
+
+Commençons par le planning. La première version de l'application doit être livrée à la fin du mois de mars. L'équipe de développement a terminé l'écran de connexion et travaille maintenant sur la synchronisation des données. Il reste environ quatre semaines de travail, ce qui est serré mais réaliste.
+
+Passons au budget. Nous avons consommé soixante pour cent de l'enveloppe prévue pour l'année. Les dépenses de matériel sont plus élevées que prévu, car nous avons dû remplacer deux serveurs. En revanche, les frais de déplacement sont en baisse grâce aux réunions à distance.
+
+Enfin, le recrutement. Nous cherchons toujours un développeur mobile et une personne pour les tests. Les entretiens commencent la semaine prochaine. Je propose que chacun relise les fiches de poste avant vendredi et envoie ses remarques par courriel.
+
+Avez-vous des questions ? Si ce n'est pas le cas, je vous remercie et nous nous retrouvons dans quinze jours pour le prochain point.

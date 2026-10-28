@@ -7,3 +7,6 @@ __pycache__/
 models/
 data/
 certs/
+
+# Échantillon de test regénérable (scripts/make_sample.ps1)
+tests/samples/*.wav
