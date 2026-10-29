@@ -93,6 +93,23 @@ automatiquement, et les versions suivantes s'installent par-dessus.
 
 La release indique l'empreinte SHA-256 de l'APK et celle du certificat de signature.
 
+## Côté PC : le panneau « Connecter le téléphone »
+
+L'appli n'a pas besoin de connaître autre chose que ce que le panneau affiche. Le bouton de la page du PC
+appelle `GET /api/phone` (`scribe/server.py`, adresses et QR dans `scribe/phone.py`) :
+
+- **Adresse complète** `https://<ip-privée>:<port>/?t=<jeton>` : exactement le format lu par
+  `ServerAddress.parse` (HTTPS, hôte privé, jeton `[A-Za-z0-9_-]{8,128}`). Aucune modification de l'appli
+  n'a été nécessaire : elle acceptait déjà l'adresse complète dans un seul champ.
+- **Empreinte SHA-256** du certificat chargé par le serveur (même format `AB:CD:…` que `Tls.forDisplay`).
+- **QR code** de l'adresse complète, en SVG généré par `segno` (bibliothèque Python pure, installée dans le
+  `.venv`). Le scan n'est pas pris en charge par l'appli : on lit le QR avec l'appareil photo du téléphone et
+  on colle le lien dans l'appli.
+- **Accès restreint au PC.** La route refuse toute requête dont l'adresse du client n'est pas `127.0.0.1` ou
+  `::1`, ou dont l'en-tête `Host` n'est pas `localhost`/`127.0.0.1` (`uvicorn` tourne avec
+  `proxy_headers=False`, donc `X-Forwarded-For` est ignoré). Les contrôles d'hôte et d'origine existants
+  restent actifs. Réponses en `Cache-Control: no-store`. `POST /api/phone/token` remplace le jeton.
+
 ## Compilation
 
 - Déclenchement : push d'un tag `vX.Y.Z`, qui publie la release « Scribe vX.Y.Z (PoC) » avec

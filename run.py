@@ -12,7 +12,7 @@ import uvicorn
 
 import scribe  # pose les variables d'environnement Hugging Face avant tout le reste
 from scribe import server
-from scribe.certs import ensure_certificate, fingerprint, lan_addresses
+from scribe.certs import certificate_ips, ensure_certificate, fingerprint, lan_addresses
 
 
 def main() -> None:
@@ -24,9 +24,13 @@ def main() -> None:
                         help="régénère le certificat (si l'adresse IP du PC a changé)")
     args = parser.parse_args()
 
-    options = {"host": "127.0.0.1", "port": args.port, "log_level": "warning"}
+    # proxy_headers=False : l'adresse du client est toujours celle de la connexion réelle,
+    # jamais un en-tête X-Forwarded-For (le panneau « Connecter le téléphone » s'appuie dessus).
+    options = {"host": "127.0.0.1", "port": args.port, "log_level": "warning",
+               "proxy_headers": False}
     if args.lan:
         cert, key = ensure_certificate(force=args.new_cert)
+        server.CERT_INFO = {"fingerprint": fingerprint(cert), "ips": certificate_ips(cert)}
         server.ACCESS_TOKEN = secrets.token_urlsafe(12)
         server.ALLOWED_HOSTS.update(lan_addresses() + [socket.gethostname().lower()])
         options.update(host="0.0.0.0", ssl_certfile=str(cert), ssl_keyfile=str(key))

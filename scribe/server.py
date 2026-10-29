@@ -15,12 +15,13 @@ from urllib.parse import unquote, urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import DATA_DIR, config
 from .asr import AudioError, Transcriber, decode_audio, is_memory_error, probe_audio, read_wav
 from .model_manager import HubUnreachable, ModelManager
+from .phone import lan_candidates, qr_data_uri
 
 STATIC_DIR = Path(__file__).parent / "static"
 LANGUAGE_RE = re.compile(r"^(auto|[a-z]{2}(-[A-Z]{2})?)$")
@@ -29,6 +30,11 @@ LANGUAGE_RE = re.compile(r"^(auto|[a-z]{2}(-[A-Z]{2})?)$")
 ACCESS_TOKEN: str | None = None
 # Noms d'hôte acceptés (anti « DNS rebinding ») ; run.py ajoute les IP locales en mode --lan.
 ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
+# Empreinte et adresses IP du certificat en cours d'utilisation, posées par run.py en mode --lan.
+CERT_INFO: dict | None = None
+# Le panneau « Connecter le téléphone » ne sert que le PC lui-même : client ET nom d'hôte locaux.
+LOCAL_CLIENTS = {"127.0.0.1", "::1"}
+LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 MAX_PENDING_JOBS = 1
 PENDING_STATES = ("receiving", "decoding", "queued", "running")
 IMPORT_CHUNK = 1024 * 1024
@@ -173,11 +179,60 @@ def index() -> FileResponse:
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def _is_local(request: Request) -> bool:
+    client = request.client.host if request.client else ""
+    host = urlsplit("//" + request.headers.get("host", "")).hostname
+    return client in LOCAL_CLIENTS and host in LOCAL_HOSTS
+
+
+def _require_local(request: Request) -> None:
+    if not _is_local(request):
+        raise HTTPException(403, "Réservé au PC qui exécute Scribe.")
+
+
+def _phone_payload(request: Request) -> dict:
+    port = (request.scope.get("server") or (None, 8765))[1]
+    token, cert = ACCESS_TOKEN, CERT_INFO
+    if token is None or cert is None:
+        return {"lan": False, "port": port}
+    addresses = []
+    for candidate in lan_candidates():
+        ip = candidate["ip"]
+        url = f"https://{ip}:{port}/?t={token}"
+        addresses.append({**candidate, "address": f"https://{ip}:{port}", "url": url,
+                          "qr": qr_data_uri(url), "in_certificate": ip in cert["ips"]})
+    return {"lan": True, "port": port, "token": token, "fingerprint": cert["fingerprint"],
+            "addresses": addresses}
+
+
+@app.get("/api/phone")
+def phone_info(request: Request) -> JSONResponse:
+    """Adresse, jeton et empreinte à saisir dans l'appli Android. Jamais servi à distance."""
+    _require_local(request)
+    return JSONResponse(_phone_payload(request), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/phone/token")
+def phone_new_token(request: Request) -> JSONResponse:
+    """Remplace le jeton d'accès : l'ancien cesse de marcher tout de suite."""
+    global ACCESS_TOKEN
+    _require_local(request)
+    if ACCESS_TOKEN is None:
+        raise HTTPException(409, "Le mode téléphone n'est pas activé.")
+    ACCESS_TOKEN = secrets.token_urlsafe(12)
+    response = JSONResponse(_phone_payload(request), headers={"Cache-Control": "no-store"})
+    # La page du PC garde ainsi son accès avec le nouveau jeton.
+    response.set_cookie("scribe_token", ACCESS_TOKEN, httponly=True, secure=True,
+                        samesite="strict")
+    return response
+
+
 @app.get("/api/status")
-def get_status() -> dict:
+def get_status(request: Request) -> dict:
     s = manager.state()
     return {
         **status,
+        "local_client": _is_local(request),
         "busy": manager.downloading or _update_lock.locked(),
         "progress": manager.progress,
         "auto_update": config.AUTO_UPDATE,

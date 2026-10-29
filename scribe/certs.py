@@ -14,17 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from . import CERTS_DIR
-
-
-def lan_addresses() -> list[str]:
-    """Adresses IPv4 de ce PC sur le réseau local (hors 127.x)."""
-    addresses = set()
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            addresses.add(info[4][0])
-    except socket.gaierror:
-        pass
-    return sorted(a for a in addresses if not a.startswith("127."))
+from .phone import lan_addresses  # noqa: F401  (réexporté : run.py l'importe d'ici)
 
 
 def fingerprint(cert_path: Path) -> str:
@@ -32,6 +22,16 @@ def fingerprint(cert_path: Path) -> str:
     par l'appli Android lors du premier raccordement."""
     cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
     return ":".join(f"{b:02X}" for b in cert.fingerprint(hashes.SHA256()))
+
+
+def certificate_ips(cert_path: Path) -> list[str]:
+    """Adresses IP déclarées dans le certificat (extension « nom alternatif »)."""
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        return []
+    return [str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
 
 
 def ensure_certificate(force: bool = False) -> tuple[Path, Path]:

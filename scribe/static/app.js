@@ -290,6 +290,7 @@ async function refreshStatus() {
   try { s = await (await fetch("/api/status")).json(); }
   catch { if (!recorder) say("Serveur local injoignable.", true); return; }
   const m = s.model;
+  $("phoneBtn").classList.toggle("hidden", !s.local_client); // réservé au PC, pas au téléphone
   if (s.import) importLimits = s.import;
   $("dropHint").textContent = "mp3, wav, m4a, ogg, flac, mp4… " +
     `(max ${Math.round(importLimits.max_bytes / 2 ** 20)} Mo, ${importLimits.max_seconds / 3600} h)`;

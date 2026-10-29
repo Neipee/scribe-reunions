@@ -47,12 +47,34 @@
                    font:inherit; font-weight:600; cursor:pointer; }
   button.primary:disabled { background:#d0d5dd; cursor:not-allowed; }
   .actions { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+  .head { align-items:flex-start; flex-wrap:nowrap; }
+  #phoneDialog { width:min(560px, 94vw); max-height:92vh; border:1px solid var(--line); border-radius:12px;
+                 padding:20px; color:var(--fg); }
+  #phoneDialog::backdrop { background:rgba(16,24,40,.45); }
+  #phoneDialog h3 { font-size:.95rem; margin:18px 0 6px; }
+  #phoneDialog p { margin:6px 0; font-size:.92rem; }
+  .copyrow { display:flex; gap:8px; align-items:stretch; margin:4px 0 2px; }
+  .copyrow input { flex:1; min-width:0; border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+                   font:.85rem/1.3 ui-monospace, Consolas, monospace; background:#f7f8fa; }
+  .copyrow button { white-space:nowrap; min-width:6.5em; }
+  #phoneDialog select { width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  #phoneDialog code { background:#f2f4f7; border-radius:4px; padding:1px 5px; font-size:.88em; }
+  #phoneDialog .hint { color:var(--muted); font-size:.85rem; }
+  #phoneDialog .warn { color:var(--warn); font-size:.88rem; }
+  #phoneDialog .qr { display:block; width:200px; height:200px; margin:8px auto; image-rendering:pixelated; }
+  #phoneDialog details { margin-top:14px; }
+  #phoneDialog summary { cursor:pointer; font-weight:600; font-size:.92rem; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Scribe réunions</h1>
-  <p class="sub">Preuve de concept : l'audio et le texte restent sur cet ordinateur.</p>
+  <div class="row head">
+    <div>
+      <h1>Scribe réunions</h1>
+      <p class="sub">Preuve de concept : l'audio et le texte restent sur cet ordinateur.</p>
+    </div>
+    <button class="secondary hidden" id="phoneBtn">Connecter le téléphone</button>
+  </div>
 
   <div class="top">
     <section class="card center">
@@ -101,7 +123,13 @@
     <div class="notice" id="notice"></div>
     <button class="secondary" id="update">Mettre à jour le modèle</button>
   </section>
+  <dialog id="phoneDialog" aria-labelledby="phoneTitle">
+    <div class="row"><h2 id="phoneTitle" style="margin:0">Connecter le téléphone</h2>
+      <button class="secondary" id="phoneClose">Fermer</button></div>
+    <div id="phoneBody"></div>
+  </dialog>
 </main>
 <script src="/static/app.js"></script>
+<script src="/static/phone.js"></script>
 </body>
 </html>

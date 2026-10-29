@@ -40,6 +40,9 @@ py -3.13 -m venv .venv
 
 Ouvrir <http://127.0.0.1:8765> dans le navigateur.
 
+Raccourci Windows : `scripts\lancer-scribe.bat` (double-clic) lance le serveur s'il ne tourne pas déjà,
+attend qu'il réponde, puis ouvre le navigateur. Il utilise des chemins relatifs au dépôt.
+
 Au premier lancement, le modèle se télécharge. Une barre de progression s'affiche, l'opération prend environ 1 à 3 minutes selon le débit, puis le chargement environ 20 s.
 
 Ensuite :
@@ -82,7 +85,39 @@ auto-signé local dans `certs/` et un jeton d'accès :
 .venv\Scripts\python run.py --lan
 ```
 
-La console affiche une adresse du type `https://192.168.x.y:8765/?t=XXXX` :
+La console affiche une adresse du type `https://192.168.x.y:8765/?t=XXXX`. L'interface web du PC propose
+aussi un bouton qui rassemble tout ce qu'il faut (voir ci-dessous).
+
+### Bouton « Connecter le téléphone »
+
+Sur le PC, la page de Scribe a un bouton **Connecter le téléphone** (en haut à droite). Il ouvre un
+panneau avec, pour chaque élément, un bouton **Copier** :
+
+1. l'**adresse complète** `https://192.168.x.y:8765/?t=…` : c'est ce qu'il faut coller dans l'appli
+   Android (le jeton est dedans, l'appli l'extrait toute seule) ;
+2. l'**empreinte SHA-256** du certificat, à comparer avec celle que l'appli affiche au premier
+   raccordement ;
+3. en repliable : le **QR code** de l'adresse complète (à lire avec l'appareil photo du téléphone, puis
+   copier le lien affiché et le coller dans l'appli ; l'appli ne scanne pas les QR), et la saisie en deux
+   champs (adresse seule + jeton).
+
+Si le PC a plusieurs adresses (Wi-Fi, Ethernet, VPN, adaptateurs virtuels), une liste permet de choisir ;
+la plus probable (Wi-Fi/Ethernet réel, route par défaut) est proposée en premier. Choisir celle du réseau
+auquel le téléphone est connecté.
+
+- **Mode local seulement.** Si le serveur a été lancé sans `--lan`, le panneau l'indique et donne la
+  commande `.venv\Scripts\python run.py --lan` à lancer (avec un bouton Copier). Il n'y a pas de bouton de
+  redémarrage automatique : un serveur relancé en arrière-plan n'aurait plus de fenêtre pour l'arrêter.
+  En mode `--lan`, ouvrir sur le PC l'adresse « Sur ce PC » de la console (`https://localhost:8765/?t=…`,
+  avec l'avertissement de certificat à accepter), puis cliquer sur le bouton.
+- **Régénérer le jeton.** Le bouton du panneau remplace le jeton : l'ancien cesse de marcher tout de suite
+  et tout téléphone connecté doit coller la nouvelle adresse. La page du PC reste connectée.
+- **Sécurité.** Le panneau et ses routes (`/api/phone`) ne répondent qu'aux requêtes venant du PC lui-même
+  (connexion et nom d'hôte locaux, vérifiés côté serveur) : le téléphone ou un autre appareil du réseau
+  reçoit un refus, même avec le bon jeton. Les réponses ne sont jamais mises en cache, le jeton n'est écrit
+  dans aucun fichier ni journal, et le QR code est dessiné sur le PC (aucun service externe).
+
+Pour utiliser le navigateur du téléphone plutôt que l'appli :
 
 1. Ouvrir cette adresse complète sur le téléphone, connecté au **même réseau** que le PC.
 2. Accepter l'avertissement de certificat (« Avancé » → « Continuer »).
@@ -112,12 +147,15 @@ de sécurité : [docs/APK.md](docs/APK.md).
 2. Ouvrir le fichier téléchargé. Android demande d'autoriser l'installation depuis cette source
    (le navigateur ou l'appli Fichiers) : l'autoriser, puis revenir et appuyer sur « Installer ».
    Play Protect peut avertir d'une appli inconnue : choisir « Installer quand même ».
-3. Sur le PC, lancer `.venv\Scripts\python run.py --lan`. Noter l'adresse
-   `https://192.168.x.y:8765/?t=…` et l'empreinte SHA-256 affichées.
-4. Dans l'appli, saisir l'adresse complète (le jeton `?t=…` est extrait automatiquement), ou
-   l'adresse et le jeton séparément, puis appuyer sur **Se connecter**.
+3. Sur le PC, lancer `.venv\Scripts\python run.py --lan`, ouvrir l'adresse « Sur ce PC » de la console,
+   puis cliquer sur **Connecter le téléphone** (voir plus haut) : le panneau donne l'adresse complète
+   `https://192.168.x.y:8765/?t=…` et l'empreinte SHA-256, avec un bouton **Copier** chacune. (Les mêmes
+   informations sont aussi affichées dans la console.)
+4. Envoyer l'adresse copiée au téléphone (messagerie à soi-même, QR code lu avec l'appareil photo…),
+   la coller dans le champ **Adresse** de l'appli (le jeton `?t=…` est extrait automatiquement ; sinon,
+   saisir l'adresse et le jeton séparément), puis appuyer sur **Se connecter**.
 5. Au premier raccordement, l'appli affiche l'empreinte du certificat du PC. La comparer avec celle
-   de la console (au moins les premiers et derniers groupes), puis appuyer sur
+   du panneau ou de la console (au moins les premiers et derniers groupes), puis appuyer sur
    **Identiques, faire confiance**. Ne pas accepter si elles diffèrent.
 6. Appuyer sur **Enregistrer** et autoriser le micro quand Android le demande. L'import d'un
    fichier audio de la page passe par le sélecteur de fichiers d'Android.
