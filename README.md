@@ -78,44 +78,56 @@ Tests (serveur lancé, modèle chargé) : `.venv\Scripts\python scripts\test_imp
 
 ## Lancer pour l'utiliser depuis un téléphone
 
-Le navigateur d'un téléphone n'autorise le micro qu'en HTTPS. Le mode `--lan` génère un certificat
-auto-signé local dans `certs/` et un jeton d'accès :
+Le serveur se lance normalement (`.venv\Scripts\python run.py`, ou le raccourci) : au démarrage, rien
+n'est exposé sur le réseau. Sur la page du PC, cliquer sur **Connecter le téléphone** (en haut à
+droite). **Un clic suffit** : sans redémarrage ni commande à taper, Scribe ouvre l'accès téléphone et
+affiche aussitôt :
+
+1. le **QR code** du lien complet, à lire avec l'appareil photo du téléphone ;
+2. le **lien complet** `https://192.168.x.y:8765/?t=…` avec un bouton **Copier** : c'est ce qu'il faut
+   coller dans l'appli Android (le jeton est dedans, l'appli l'extrait toute seule) ;
+3. l'**empreinte SHA-256** du certificat, à comparer avec celle que l'appli affiche au premier
+   raccordement ;
+4. en repliable : la saisie en deux champs (adresse seule + jeton) et l'aide « Le téléphone n'arrive pas
+   à se connecter ? ».
+
+Le panneau indique « Accessible sur le réseau local jusqu'à HH:MM », avec **Prolonger** et **Arrêter
+l'accès téléphone**. Le bouton de la page affiche aussi l'heure de fin tant que l'accès est ouvert.
+
+Comment ça marche : le serveur démarre, dans le même processus et avec le modèle déjà chargé, un second
+point d'accès HTTPS (certificat auto-signé local de `certs/`, recréé si l'adresse choisie n'y figure pas).
+Il écoute sur **une seule adresse privée** du PC (jamais `0.0.0.0`, jamais une adresse publique), sur le
+même port que la page si possible, sinon sur un port libre proche.
+
+- **Durée.** L'accès s'arrête tout seul au bout de 30 minutes (réglable avec la variable d'environnement
+  `SCRIBE_PHONE_MINUTES`), à la demande, ou quand le serveur s'arrête. « Prolonger » repart pour la même
+  durée. Une nouvelle ouverture crée un nouveau jeton.
+- **Plusieurs adresses.** Si le PC en a plusieurs (Wi-Fi, Ethernet, VPN, adaptateurs virtuels), une liste
+  permet de choisir ; la plus probable (Wi-Fi/Ethernet réel, route par défaut) est proposée en premier.
+  Choisir une autre adresse déplace l'accès dessus (même jeton).
+- **Régénérer le jeton.** L'ancien lien cesse de marcher tout de suite ; tout téléphone connecté doit
+  utiliser le nouveau.
+- **Sécurité.** Le point d'accès téléphone exige le jeton et ne sert que l'interface, l'enregistrement,
+  l'import et le suivi des transcriptions. Le panneau et ses routes (`/api/phone*`) ainsi que la mise à
+  jour du modèle n'y sont jamais servis : ils ne répondent qu'au PC lui-même (connexion et nom d'hôte
+  locaux, vérifiés côté serveur), même avec le bon jeton. Les réponses ne sont pas mises en cache, le
+  jeton n'est écrit dans aucun fichier ni journal, et le QR code est dessiné sur le PC (aucun service
+  externe).
+- **En cas d'échec** (aucune adresse réseau privée, aucun port libre, certificat impossible à créer…),
+  le panneau dit pourquoi et propose la solution de repli ci-dessous.
+
+### Solution de repli : `run.py --lan`
+
+L'ancien mode reste disponible : tout le serveur écoute sur le réseau, en HTTPS, avec un jeton, tant
+qu'il tourne.
 
 ```powershell
 .venv\Scripts\python run.py --lan
 ```
 
-La console affiche une adresse du type `https://192.168.x.y:8765/?t=XXXX`. L'interface web du PC propose
-aussi un bouton qui rassemble tout ce qu'il faut (voir ci-dessous).
-
-### Bouton « Connecter le téléphone »
-
-Sur le PC, la page de Scribe a un bouton **Connecter le téléphone** (en haut à droite). Il ouvre un
-panneau avec, pour chaque élément, un bouton **Copier** :
-
-1. l'**adresse complète** `https://192.168.x.y:8765/?t=…` : c'est ce qu'il faut coller dans l'appli
-   Android (le jeton est dedans, l'appli l'extrait toute seule) ;
-2. l'**empreinte SHA-256** du certificat, à comparer avec celle que l'appli affiche au premier
-   raccordement ;
-3. en repliable : le **QR code** de l'adresse complète (à lire avec l'appareil photo du téléphone, puis
-   copier le lien affiché et le coller dans l'appli ; l'appli ne scanne pas les QR), et la saisie en deux
-   champs (adresse seule + jeton).
-
-Si le PC a plusieurs adresses (Wi-Fi, Ethernet, VPN, adaptateurs virtuels), une liste permet de choisir ;
-la plus probable (Wi-Fi/Ethernet réel, route par défaut) est proposée en premier. Choisir celle du réseau
-auquel le téléphone est connecté.
-
-- **Mode local seulement.** Si le serveur a été lancé sans `--lan`, le panneau l'indique et donne la
-  commande `.venv\Scripts\python run.py --lan` à lancer (avec un bouton Copier). Il n'y a pas de bouton de
-  redémarrage automatique : un serveur relancé en arrière-plan n'aurait plus de fenêtre pour l'arrêter.
-  En mode `--lan`, ouvrir sur le PC l'adresse « Sur ce PC » de la console (`https://localhost:8765/?t=…`,
-  avec l'avertissement de certificat à accepter), puis cliquer sur le bouton.
-- **Régénérer le jeton.** Le bouton du panneau remplace le jeton : l'ancien cesse de marcher tout de suite
-  et tout téléphone connecté doit coller la nouvelle adresse. La page du PC reste connectée.
-- **Sécurité.** Le panneau et ses routes (`/api/phone`) ne répondent qu'aux requêtes venant du PC lui-même
-  (connexion et nom d'hôte locaux, vérifiés côté serveur) : le téléphone ou un autre appareil du réseau
-  reçoit un refus, même avec le bon jeton. Les réponses ne sont jamais mises en cache, le jeton n'est écrit
-  dans aucun fichier ni journal, et le QR code est dessiné sur le PC (aucun service externe).
+La console affiche l'adresse du type `https://192.168.x.y:8765/?t=XXXX` et l'adresse « Sur ce PC »
+(`https://localhost:8765/?t=…`, avertissement de certificat à accepter). Dans ce mode, le bouton
+**Connecter le téléphone** affiche directement le lien, le QR code et l'empreinte.
 
 Pour utiliser le navigateur du téléphone plutôt que l'appli :
 
@@ -127,11 +139,11 @@ Sans le jeton, l'accès est refusé.
 
 Points à connaître :
 
-- **Pare-feu Windows.** Au premier lancement en `--lan`, Windows peut demander d'autoriser Python sur le réseau. Sur un poste d'entreprise, cela peut exiger un administrateur. Sans cette autorisation, le téléphone n'atteint pas le PC.
+- **Pare-feu Windows.** À la première ouverture de l'accès téléphone (ou au premier lancement en `--lan`), Windows peut afficher « Autoriser l'accès ? » pour Python : cocher « Réseaux privés » et autoriser. La fenêtre peut rester derrière le navigateur (regarder la barre des tâches). Sur un poste d'entreprise, ce choix peut exiger un administrateur. Sans cette autorisation, le téléphone n'atteint pas le PC (la page ne se charge pas) ; Scribe ne peut pas le détecter lui-même.
 - **Réseau d'entreprise.** Les réseaux Wi-Fi d'entreprise ou invités isolent souvent les appareils entre eux. Le plus simple : un partage de connexion du téléphone vers le PC, ou un réseau domestique.
-- **Changement d'adresse IP.** Si l'adresse IP du PC change, relancer avec `--lan --new-cert`.
+- **Changement d'adresse IP.** Avec le bouton, le certificat est recréé automatiquement si l'adresse n'y figure pas (l'appli redemande alors de comparer l'empreinte). En mode `--lan`, relancer avec `--lan --new-cert`.
 - **Écran du téléphone.** Il doit rester allumé et la page ouverte pendant l'enregistrement. La page demande de garder l'écran actif quand le navigateur le permet.
-- **Empreinte du certificat.** La console affiche aussi l'« Empreinte SHA-256 du certificat ». L'appli Android la montre au premier raccordement pour comparaison.
+- **Empreinte du certificat.** Le panneau (et la console en mode `--lan`) affiche l'« Empreinte SHA-256 du certificat ». L'appli Android la montre au premier raccordement pour comparaison.
 
 ## Installer l'APK sur le téléphone
 
@@ -147,13 +159,13 @@ de sécurité : [docs/APK.md](docs/APK.md).
 2. Ouvrir le fichier téléchargé. Android demande d'autoriser l'installation depuis cette source
    (le navigateur ou l'appli Fichiers) : l'autoriser, puis revenir et appuyer sur « Installer ».
    Play Protect peut avertir d'une appli inconnue : choisir « Installer quand même ».
-3. Sur le PC, lancer `.venv\Scripts\python run.py --lan`, ouvrir l'adresse « Sur ce PC » de la console,
-   puis cliquer sur **Connecter le téléphone** (voir plus haut) : le panneau donne l'adresse complète
-   `https://192.168.x.y:8765/?t=…` et l'empreinte SHA-256, avec un bouton **Copier** chacune. (Les mêmes
-   informations sont aussi affichées dans la console.)
-4. Envoyer l'adresse copiée au téléphone (messagerie à soi-même, QR code lu avec l'appareil photo…),
-   la coller dans le champ **Adresse** de l'appli (le jeton `?t=…` est extrait automatiquement ; sinon,
-   saisir l'adresse et le jeton séparément), puis appuyer sur **Se connecter**.
+3. Sur le PC, dans la page de Scribe, cliquer sur **Connecter le téléphone** (voir plus haut) : l'accès
+   s'ouvre et le panneau affiche le QR code, le lien complet `https://192.168.x.y:8765/?t=…` et
+   l'empreinte SHA-256, avec un bouton **Copier** chacun.
+4. Lire le QR code avec l'appareil photo du téléphone et copier le lien affiché (ou l'envoyer par
+   messagerie à soi-même), le coller dans le champ **Adresse** de l'appli (le jeton `?t=…` est extrait
+   automatiquement ; sinon, saisir l'adresse et le jeton séparément), puis appuyer sur **Se connecter**.
+   L'appli ne scanne pas elle-même les QR codes.
 5. Au premier raccordement, l'appli affiche l'empreinte du certificat du PC. La comparer avec celle
    du panneau ou de la console (au moins les premiers et derniers groupes), puis appuyer sur
    **Identiques, faire confiance**. Ne pas accepter si elles diffèrent.
@@ -165,12 +177,15 @@ Facultatif : comparer l'empreinte SHA-256 de l'APK avec celle indiquée dans la 
 
 Limites :
 
-- **PC allumé, même réseau.** Le PC doit être allumé, lancé avec `--lan`, et le téléphone sur le
-  même réseau Wi-Fi (ou partage de connexion). Le pare-feu Windows doit autoriser Python.
-- **Jeton à chaque lancement.** Le jeton change à chaque démarrage du PC : il faut le ressaisir
-  (l'appli garde l'adresse et l'empreinte, le message « Jeton refusé » le signale).
+- **PC allumé, même réseau.** Le PC doit être allumé avec l'accès téléphone ouvert (bouton) ou lancé
+  avec `--lan`, et le téléphone sur le même réseau Wi-Fi (ou partage de connexion). Le pare-feu Windows
+  doit autoriser Python.
+- **Jeton à chaque ouverture.** Le jeton change à chaque ouverture de l'accès (et à chaque démarrage en
+  `--lan`) : il faut recoller le lien (l'appli garde l'adresse et l'empreinte, le message « Jeton
+  refusé » le signale). L'accès s'arrête au bout de 30 minutes sauf prolongation.
 - **Certificat auto-signé.** L'appli ne l'accepte que s'il a l'empreinte que vous avez confirmée.
-  Après `--new-cert`, elle signale le changement et redemande la comparaison.
+  Si le certificat est recréé (nouvelle adresse IP, `--new-cert`), elle signale le changement et
+  redemande la comparaison.
 - **Pas d'enregistrement écran éteint.** L'appli garde l'écran allumé tant qu'elle est au premier
   plan. Si l'écran est verrouillé ou si l'on change d'appli, l'enregistrement peut s'interrompre.
   L'enregistrement en arrière-plan est hors du périmètre de ce PoC.

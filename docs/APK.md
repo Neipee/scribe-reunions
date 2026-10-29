@@ -6,7 +6,7 @@ Code : [`android/`](../android). Compilation et publication : [`.github/workflow
 ## Architecture
 
 ```
-Téléphone : appli Scribe                                   PC : python run.py --lan
+Téléphone : appli Scribe                PC : accès téléphone ouvert (bouton) ou run.py --lan
 ┌──────────────────────────────┐   HTTPS, réseau local    ┌──────────────────────────┐
 │ SetupActivity                │ ───────────────────────▶ │ FastAPI + Nemotron ASR   │
 │  adresse + jeton, empreinte  │   certificat épinglé     │ interface web (static/)  │
@@ -33,7 +33,8 @@ allumé et afficher des erreurs lisibles.
 **Certificat auto-signé : épinglage confirmé par l'utilisateur.** Au premier raccordement, l'appli ouvre
 une connexion TLS vers le PC, lit le certificat, puis interrompt la poignée de main. Aucune donnée n'est
 donc envoyée à un serveur non vérifié, et surtout pas le jeton. Elle affiche l'empreinte SHA-256, que
-`run.py --lan` affiche aussi dans la console (fonction `fingerprint` de `scribe/certs.py`). Si
+le panneau « Connecter le téléphone » du PC affiche aussi (et la console en mode `run.py --lan` ;
+fonction `fingerprint` de `scribe/certs.py`). Si
 l'utilisateur confirme, l'empreinte est enregistrée pour ce couple hôte:port. Ensuite :
 
 - la vérification native (`checkAccess`) n'accepte que ce certificat exact (`PinnedTrustManager`) ;
@@ -95,20 +96,46 @@ La release indique l'empreinte SHA-256 de l'APK et celle du certificat de signat
 
 ## Côté PC : le panneau « Connecter le téléphone »
 
-L'appli n'a pas besoin de connaître autre chose que ce que le panneau affiche. Le bouton de la page du PC
-appelle `GET /api/phone` (`scribe/server.py`, adresses et QR dans `scribe/phone.py`) :
+L'appli n'a pas besoin de connaître autre chose que ce que le panneau affiche. Le serveur se lance
+normalement (`run.py`, page sur `http://127.0.0.1:8765`, rien d'exposé). **Un clic** sur le bouton de
+la page du PC appelle `POST /api/phone/enable` (`scribe/server.py`, `scribe/phone_access.py`), qui ouvre
+l'accès téléphone sans redémarrage, puis affiche :
 
-- **Adresse complète** `https://<ip-privée>:<port>/?t=<jeton>` : exactement le format lu par
-  `ServerAddress.parse` (HTTPS, hôte privé, jeton `[A-Za-z0-9_-]{8,128}`). Aucune modification de l'appli
-  n'a été nécessaire : elle acceptait déjà l'adresse complète dans un seul champ.
-- **Empreinte SHA-256** du certificat chargé par le serveur (même format `AB:CD:…` que `Tls.forDisplay`).
 - **QR code** de l'adresse complète, en SVG généré par `segno` (bibliothèque Python pure, installée dans le
   `.venv`). Le scan n'est pas pris en charge par l'appli : on lit le QR avec l'appareil photo du téléphone et
   on colle le lien dans l'appli.
-- **Accès restreint au PC.** La route refuse toute requête dont l'adresse du client n'est pas `127.0.0.1` ou
-  `::1`, ou dont l'en-tête `Host` n'est pas `localhost`/`127.0.0.1` (`uvicorn` tourne avec
-  `proxy_headers=False`, donc `X-Forwarded-For` est ignoré). Les contrôles d'hôte et d'origine existants
-  restent actifs. Réponses en `Cache-Control: no-store`. `POST /api/phone/token` remplace le jeton.
+- **Adresse complète** `https://<ip-privée>:<port>/?t=<jeton>` : exactement le format lu par
+  `ServerAddress.parse` (HTTPS, hôte privé, jeton `[A-Za-z0-9_-]{8,128}`). Aucune modification de l'appli
+  n'a été nécessaire : elle acceptait déjà l'adresse complète dans un seul champ.
+- **Empreinte SHA-256** du certificat réellement présenté (même format `AB:CD:…` que `Tls.forDisplay`) ;
+  le PC la vérifie en se connectant à sa propre adresse juste après l'ouverture.
+
+Ouverture à chaud (`PhoneAccess` dans `scribe/phone_access.py`) :
+
+- un second `uvicorn.Server` démarre dans un fil d'exécution du même processus : même application, même
+  modèle déjà chargé (pas de rechargement, `lifespan="off"`) ;
+- il écoute sur **une seule adresse privée** choisie parmi les interfaces du PC (jamais `0.0.0.0`, adresses
+  non privées refusées), en HTTPS avec le certificat de `certs/` (recréé, comme `--new-cert`, si l'adresse
+  n'y figure pas), sur le port de la page si possible, sinon sur un port libre proche
+  (`SO_EXCLUSIVEADDRUSE`, pour ne jamais partager un port pris) ;
+- jeton tiré à l'ouverture (`secrets.token_urlsafe`), gardé en mémoire seulement ; journal d'accès coupé ;
+- arrêt après 30 min (`SCRIBE_PHONE_MINUTES`), sur « Arrêter l'accès téléphone » ou à l'arrêt du serveur ;
+  « Prolonger » repousse l'échéance. Après l'arrêt, les connexions sont refusées.
+
+Les requêtes de ce second point d'accès sont marquées dans le scope ASGI (marque posée côté serveur, que
+le client ne peut pas imiter). Elles doivent avoir le jeton, l'hôte exact `<ip>` et une origine cohérente,
+et seules ces routes y répondent : `/`, `/static/*`, `/api/status`, `/api/transcribe`, `/api/import`,
+`/api/jobs/*`.
+
+**Accès au panneau restreint au PC.** Les routes `/api/phone*` (`GET /api/phone`, `POST
+/api/phone/enable|extend|disable|token`) refusent toute requête arrivée par le point d'accès téléphone,
+dont l'adresse du client n'est pas `127.0.0.1`/`::1`, ou dont l'en-tête `Host` n'est pas
+`localhost`/`127.0.0.1` (`uvicorn` tourne avec `proxy_headers=False`, donc `X-Forwarded-For` est ignoré).
+Réponses en `Cache-Control: no-store`. En mode `run.py --lan`, le bouton n'ouvre rien de plus : il affiche
+directement le lien du serveur déjà joignable.
+
+Effet côté appli : l'empreinte est épinglée par couple hôte:port. Si l'accès s'ouvre sur un autre port
+(port de la page déjà pris) ou si le certificat est recréé, l'appli redemande la comparaison.
 
 ## Compilation
 
@@ -130,7 +157,10 @@ Sans variables `SCRIBE_KEYSTORE*`, l'APK produit n'est pas signé.
 - **Écran éteint.** `FLAG_KEEP_SCREEN_ON` garde l'écran allumé tant que la page est affichée. Si l'écran
   est verrouillé ou l'appli mise en arrière-plan, Android peut couper le micro de la WebView.
   L'enregistrement en arrière-plan (service au premier plan) est hors périmètre.
-- **Jeton.** Il change à chaque lancement de `run.py --lan` : il faut le ressaisir dans l'appli.
+- **Jeton.** Il change à chaque ouverture de l'accès téléphone (et à chaque lancement de `run.py --lan`) :
+  il faut recoller le lien dans l'appli. L'accès s'arrête au bout de 30 min sauf prolongation.
+- **Pare-feu Windows.** À la première ouverture, Windows peut demander d'autoriser Python sur le réseau
+  (administrateur parfois nécessaire sur un poste d'entreprise). Le PC ne peut pas détecter ce blocage.
 - **Même réseau.** Les Wi-Fi d'entreprise ou invités isolent souvent les appareils (voir le README).
 - **Pas de mode hors ligne.** Sans le PC, l'appli n'a aucune fonction.
 
@@ -139,8 +169,10 @@ Sans variables `SCRIBE_KEYSTORE*`, l'APK produit n'est pas signé.
 Rien de ce qui suit n'a pu être testé ici : il n'y a ni téléphone ni émulateur sur le poste.
 
 1. Installation de l'APK depuis la page Releases (autorisation de la source, Play Protect).
-2. Saisie de l'adresse complète copiée depuis la console, puis de l'adresse et du jeton séparés.
-3. Affichage de l'empreinte et égalité avec celle de la console.
+2. Clic sur « Connecter le téléphone » sur le PC, lecture du QR code avec l'appareil photo, collage du
+   lien dans l'appli ; puis saisie de l'adresse et du jeton séparés. Invite du pare-feu Windows au
+   premier raccordement.
+3. Affichage de l'empreinte et égalité avec celle du panneau.
 4. Chargement de l'interface dans la WebView après confirmation : le certificat épinglé est-il bien
    accepté par `onReceivedSslError`, sans écran blanc ?
 5. Micro : demande Android, puis Enregistrer / Arrêter et transcription affichée. Vérifier que
@@ -152,6 +184,8 @@ Rien de ce qui suit n'a pu être testé ici : il n'y a ni téléphone ni émulat
    - PC éteint : « PC injoignable » ;
    - mauvais jeton : « Jeton refusé » ;
    - micro refusé ;
-   - PC relancé avec `--new-cert` : « Certificat du PC changé ».
+   - PC relancé avec `--new-cert` : « Certificat du PC changé » ;
+   - accès téléphone arrêté (bouton ou échéance) : « PC injoignable » ; rouvert : « Jeton refusé »
+     tant que le nouveau lien n'est pas collé.
 8. Rotation de l'écran pendant un enregistrement (elle ne doit pas l'interrompre) ; écran qui reste allumé.
 9. Android 15 : marges des barres système (contenu non masqué).
