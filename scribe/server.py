@@ -22,6 +22,7 @@ from . import DATA_DIR, config
 from .asr import AudioError, Transcriber, decode_audio, is_memory_error, probe_audio, read_wav
 from .model_manager import HubUnreachable, ModelManager
 from .phone import lan_candidates, qr_data_uri
+from .phone_access import PHONE_SCOPE_KEY, PhoneAccess, PhoneAccessError
 
 STATIC_DIR = Path(__file__).parent / "static"
 LANGUAGE_RE = re.compile(r"^(auto|[a-z]{2}(-[A-Z]{2})?)$")
@@ -38,10 +39,17 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 MAX_PENDING_JOBS = 1
 PENDING_STATES = ("receiving", "decoding", "queued", "running")
 IMPORT_CHUNK = 1024 * 1024
+# Routes servies par l'écouteur téléphone activé à chaud : interface, enregistrement, import et
+# suivi. Tout le reste (panneau /api/phone*, mise à jour du modèle…) y est refusé.
+PHONE_ROUTES = {("GET", "/"), ("GET", "/api/status"), ("POST", "/api/transcribe"),
+                ("POST", "/api/import")}
+PHONE_PREFIXES = (("GET", "/static/"), ("GET", "/api/jobs/"))
+NO_STORE = {"Cache-Control": "no-store"}
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 manager = ModelManager()
 transcriber = Transcriber()
+phone_access = PhoneAccess(app, config.PHONE_ACCESS_MINUTES)
 
 # Phase du modèle affichée dans l'interface : init, downloading, loading, ready, absent, error
 status = {"phase": "init", "message": "Démarrage…", "notice": ""}
@@ -149,8 +157,40 @@ def _startup() -> None:
     threading.Thread(target=_bootstrap, daemon=True, name="bootstrap").start()
 
 
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    phone_access.stop()
+
+
+def _phone_route_allowed(method: str, path: str) -> bool:
+    return ((method, path) in PHONE_ROUTES
+            or any(method == m and path.startswith(p) for m, p in PHONE_PREFIXES))
+
+
+async def _check_phone_access(request: Request, call_next):
+    """Requêtes reçues par l'écouteur téléphone : adresse exacte, routes limitées, jeton obligatoire."""
+    host = request.headers.get("host", "")
+    if urlsplit("//" + host).hostname != phone_access.ip:
+        return PlainTextResponse("Hôte non autorisé.", status_code=403)
+    if not _phone_route_allowed(request.method, request.url.path):
+        return PlainTextResponse("Réservé au PC qui exécute Scribe.", status_code=403)
+    origin = request.headers.get("origin")
+    if request.method != "GET" and origin and urlsplit(origin).netloc != host:
+        return PlainTextResponse("Origine non autorisée.", status_code=403)
+    supplied = request.query_params.get("t") or request.cookies.get("scribe_token") or ""
+    if not phone_access.check_token(supplied):
+        return PlainTextResponse("Accès refusé : ouvrez l'adresse complète affichée sur le PC "
+                                 "(avec ?t=…).", status_code=403)
+    response = await call_next(request)
+    if request.query_params.get("t"):
+        response.set_cookie("scribe_token", supplied, httponly=True, secure=True, samesite="strict")
+    return response
+
+
 @app.middleware("http")
 async def _check_access(request: Request, call_next):
+    if request.scope.get(PHONE_SCOPE_KEY):
+        return await _check_phone_access(request, call_next)
     # Empêche une autre page web ouverte dans le navigateur d'utiliser l'API locale.
     host = request.headers.get("host", "")
     if urlsplit("//" + host).hostname not in ALLOWED_HOSTS:
@@ -182,7 +222,8 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def _is_local(request: Request) -> bool:
     client = request.client.host if request.client else ""
     host = urlsplit("//" + request.headers.get("host", "")).hostname
-    return client in LOCAL_CLIENTS and host in LOCAL_HOSTS
+    return (not request.scope.get(PHONE_SCOPE_KEY)
+            and client in LOCAL_CLIENTS and host in LOCAL_HOSTS)
 
 
 def _require_local(request: Request) -> None:
@@ -190,26 +231,85 @@ def _require_local(request: Request) -> None:
         raise HTTPException(403, "Réservé au PC qui exécute Scribe.")
 
 
-def _phone_payload(request: Request) -> dict:
-    port = (request.scope.get("server") or (None, 8765))[1]
-    token, cert = ACCESS_TOKEN, CERT_INFO
-    if token is None or cert is None:
-        return {"lan": False, "port": port}
+def _local_port(request: Request) -> int:
+    return (request.scope.get("server") or (None, 8765))[1]
+
+
+def _lan_payload(request: Request) -> dict:
+    """Mode `run.py --lan` : tout le serveur écoute sur le réseau, avec le jeton ACCESS_TOKEN."""
+    port, token, cert = _local_port(request), ACCESS_TOKEN, CERT_INFO
     addresses = []
     for candidate in lan_candidates():
         ip = candidate["ip"]
         url = f"https://{ip}:{port}/?t={token}"
         addresses.append({**candidate, "address": f"https://{ip}:{port}", "url": url,
                           "qr": qr_data_uri(url), "in_certificate": ip in cert["ips"]})
-    return {"lan": True, "port": port, "token": token, "fingerprint": cert["fingerprint"],
+    return {"mode": "lan", "port": port, "token": token, "fingerprint": cert["fingerprint"],
             "addresses": addresses}
+
+
+def _hot_payload() -> dict:
+    """Accès ouvert depuis le panneau : seule l'adresse active a un écouteur, donc un lien."""
+    ip, port, token = phone_access.ip, phone_access.port, phone_access.token
+    url = f"https://{ip}:{port}/?t={token}"
+    active = {"address": f"https://{ip}:{port}", "url": url, "qr": qr_data_uri(url),
+              "in_certificate": True, "active": True}
+    addresses = [{**c, **active} if c["ip"] == ip else {**c, "active": False}
+                 for c in lan_candidates()]
+    if not any(a["active"] for a in addresses):  # adresse disparue depuis l'activation
+        addresses.insert(0, {"ip": ip, "interface": "", "kind": "autre", "virtual": False,
+                             "main_route": False, "recommended": False, **active})
+    return {"mode": "hot", "port": port, "token": token, "fingerprint": phone_access.fingerprint,
+            "addresses": addresses, "active_ip": ip, "expires_at": phone_access.expires_at,
+            "minutes": phone_access.default_minutes, "verified": phone_access.verified,
+            "cert_regenerated": phone_access.cert_regenerated}
+
+
+def _phone_response(request: Request) -> JSONResponse:
+    if ACCESS_TOKEN is not None and CERT_INFO is not None:
+        payload = _lan_payload(request)
+    elif phone_access.active:
+        payload = _hot_payload()
+    else:
+        payload = {"mode": "off", "minutes": phone_access.default_minutes,
+                   "stopped_reason": phone_access.stopped_reason}
+    return JSONResponse(payload, headers=NO_STORE)
 
 
 @app.get("/api/phone")
 def phone_info(request: Request) -> JSONResponse:
     """Adresse, jeton et empreinte à saisir dans l'appli Android. Jamais servi à distance."""
     _require_local(request)
-    return JSONResponse(_phone_payload(request), headers={"Cache-Control": "no-store"})
+    return _phone_response(request)
+
+
+@app.post("/api/phone/enable")
+def phone_enable(request: Request, ip: str | None = None) -> JSONResponse:
+    """Ouvre l'accès téléphone sans redémarrer (ou le déplace sur l'adresse `ip`)."""
+    _require_local(request)
+    if ACCESS_TOKEN is None:  # en mode --lan, le serveur est déjà joignable depuis le réseau
+        try:
+            phone_access.enable(ip, _local_port(request))
+        except PhoneAccessError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    return _phone_response(request)
+
+
+@app.post("/api/phone/extend")
+def phone_extend(request: Request) -> JSONResponse:
+    _require_local(request)
+    try:
+        phone_access.extend()
+    except PhoneAccessError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _phone_response(request)
+
+
+@app.post("/api/phone/disable")
+def phone_disable(request: Request) -> JSONResponse:
+    _require_local(request)
+    phone_access.stop()
+    return _phone_response(request)
 
 
 @app.post("/api/phone/token")
@@ -218,9 +318,13 @@ def phone_new_token(request: Request) -> JSONResponse:
     global ACCESS_TOKEN
     _require_local(request)
     if ACCESS_TOKEN is None:
-        raise HTTPException(409, "Le mode téléphone n'est pas activé.")
+        try:
+            phone_access.new_token()
+        except PhoneAccessError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return _phone_response(request)
     ACCESS_TOKEN = secrets.token_urlsafe(12)
-    response = JSONResponse(_phone_payload(request), headers={"Cache-Control": "no-store"})
+    response = _phone_response(request)
     # La page du PC garde ainsi son accès avec le nouveau jeton.
     response.set_cookie("scribe_token", ACCESS_TOKEN, httponly=True, secure=True,
                         samesite="strict")
@@ -233,6 +337,9 @@ def get_status(request: Request) -> dict:
     return {
         **status,
         "local_client": _is_local(request),
+        "remote_client": bool(request.scope.get(PHONE_SCOPE_KEY)),
+        "phone_access": ({"active": phone_access.active, "expires_at": phone_access.expires_at}
+                         if _is_local(request) else None),
         "busy": manager.downloading or _update_lock.locked(),
         "progress": manager.progress,
         "auto_update": config.AUTO_UPDATE,

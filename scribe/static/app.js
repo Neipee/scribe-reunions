@@ -66,7 +66,7 @@ function encodeWav(chunks) {
 async function startRecording() {
   if (!window.isSecureContext || !navigator.mediaDevices) {
     say("Micro indisponible : la page doit être ouverte en HTTPS (ou sur localhost). " +
-        "Pour un téléphone, lancez le PC avec « python run.py --lan ».", true);
+        "Pour un téléphone, ouvrez le lien donné par « Connecter le téléphone » sur la page du PC.", true);
     return;
   }
   let stream;
@@ -290,7 +290,12 @@ async function refreshStatus() {
   try { s = await (await fetch("/api/status")).json(); }
   catch { if (!recorder) say("Serveur local injoignable.", true); return; }
   const m = s.model;
-  $("phoneBtn").classList.toggle("hidden", !s.local_client); // réservé au PC, pas au téléphone
+  const phoneBtn = $("phoneBtn"), access = s.phone_access;
+  phoneBtn.classList.toggle("hidden", !s.local_client); // réservé au PC, pas au téléphone
+  phoneBtn.textContent = access && access.active
+    ? "Téléphone : accès ouvert jusqu'à " + new Date(access.expires_at * 1000)
+      .toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
+    : "Connecter le téléphone";
   if (s.import) importLimits = s.import;
   $("dropHint").textContent = "mp3, wav, m4a, ogg, flac, mp4… " +
     `(max ${Math.round(importLimits.max_bytes / 2 ** 20)} Mo, ${importLimits.max_seconds / 3600} h)`;
@@ -317,6 +322,7 @@ async function refreshStatus() {
   } else { bar.classList.add("hidden"); txt.classList.add("hidden"); }
   const upd = $("update");
   upd.disabled = s.busy;
+  upd.classList.toggle("hidden", !!s.remote_client); // mise à jour du modèle : depuis le PC seulement
   upd.textContent = m.revision ? "Mettre à jour le modèle" : "Télécharger le modèle";
   if (!recorder && !transcribing) {
     if (!modelReady) say(s.message, s.phase === "error" || s.phase === "absent");

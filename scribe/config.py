@@ -29,3 +29,7 @@ MAX_IMPORT_BYTES = int(float(os.environ.get("SCRIBE_MAX_IMPORT_MB", "500")) * 10
 MAX_IMPORT_SECONDS = int(float(os.environ.get("SCRIBE_MAX_IMPORT_HOURS", "4")) * 3600)
 IMPORT_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".flac", ".webm",
                      ".wma", ".aiff", ".aif", ".amr", ".mp4", ".m4v", ".mov", ".mkv", ".3gp")
+
+# Accès téléphone activé depuis la page du PC (bouton « Connecter le téléphone ») : durée avant
+# arrêt automatique, en minutes. Le panneau permet de prolonger d'autant.
+PHONE_ACCESS_MINUTES = max(1, int(float(os.environ.get("SCRIBE_PHONE_MINUTES", "30"))))
